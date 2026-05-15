@@ -18,11 +18,25 @@ user_prefs:
   quiet_hours_start: "22:30"     # Suppress OPEN notifications after this.
   quiet_hours_end: "06:00"       # Resume OPEN notifications after this.
   morning_close_time: "06:30"    # Approximate sunrise + 30 min until v2 ships astral.
+  # Schedule preset: commuter | wfh | night_shift | light_sleeper | aggressive | conservative | custom
+  # Each preset bundles a set of behavior flags described in README → Schedule profiles.
+  profile: "commuter"
+  # Optional: per-field overrides on top of the preset.
+  profile_overrides: {}
 
 indoor_temp:
-  source: "manual"               # manual | sensor_file
+  source: "manual"               # manual | sensor_file | nest | ble
   manual_default_f: 71.0         # Used until you run `nightcool set-indoor <temp>`.
   sensor_file_path: null         # For sensor_file: path to a file containing a single float.
+  # nest:
+  #   project_id: ""
+  #   client_id: ""
+  #   client_secret: ""
+  #   refresh_token: ""
+  #   device_id: ""
+  # ble:
+  #   mac: "AA:BB:CC:DD:EE:FF"
+  #   cache_file: "/var/lib/nightcool/upstairs.tempf"
 
 windows:
   - id: br_west
@@ -47,8 +61,17 @@ windows:
     on_bad_wind_sector: false
 
 notifications:
-  service: "console"              # ntfy | pushover | console
+  service: "console"              # ntfy | pushover | console | web_push
   ntfy_topic: "nightcool-yourname-random-string"
   ntfy_server: "https://ntfy.sh"
   pushover_user_key: null
   pushover_app_token: null
+  # web_push:                     # Run `nightcool web-push-keys` to generate.
+  #   vapid_public_key: ""
+  #   vapid_private_key: ""
+  #   vapid_subject: "mailto:you@example.com"
+
+web:
+  host: "127.0.0.1"               # Bind only to loopback by default.
+  port: 8765
+  data_log_path: "data_log.sqlite"

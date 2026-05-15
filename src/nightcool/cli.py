@@ -1,4 +1,4 @@
-"""Typer CLI: check, forecast, daemon, set-indoor, test-notify."""
+"""Typer CLI: check, forecast, daemon, set-indoor, test-notify, serve, …"""
 from __future__ import annotations
 
 import logging
@@ -7,11 +7,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import typer
+import yaml
 
-from .config import AppConfig, load_config
-from .daemon import format_notification, read_indoor_temp, run_daemon, run_once
+from .config import AppConfig, ProfileName, load_config
+from .daemon import _build_notifier, format_notification, read_indoor_temp, run_daemon, run_once
 from .engine import decide_actions
-from .notifier import make_notifier
+from .notifier import generate_vapid_keys
 from .state import read_state, set_indoor_temp, write_state
 from .weather import NWSProvider
 
@@ -38,12 +39,15 @@ def check(
     tz = ZoneInfo(cfg.location.timezone)
     now = datetime.now(tz)
     st = read_state(state)
-    indoor = read_indoor_temp(cfg, st)
+    indoor, source_name = read_indoor_temp(cfg, st)
     provider = NWSProvider(cfg.location.latitude, cfg.location.longitude)
     forecast = provider.hourly_forecast(hours=12)
-    rec = decide_actions(indoor, forecast, cfg.windows, cfg.user_prefs, now)
+    prefs = cfg.effective_prefs()
+    profile = prefs.resolved_profile()
+    rec = decide_actions(indoor, forecast, cfg.windows, prefs, now, profile=profile)
     title, body = format_notification(rec)
-    typer.echo(f"Indoor: {indoor:.1f}°F")
+    typer.echo(f"Indoor: {indoor:.1f}°F (source: {source_name})")
+    typer.echo(f"Profile: {profile.name.value}")
     typer.echo(f"Action: {rec.action}")
     typer.echo(f"Title:  {title}")
     typer.echo(f"Reason: {body}")
@@ -113,12 +117,55 @@ def set_indoor(
 
 
 @app.command("test-notify")
-def test_notify(config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c")) -> None:
+def test_notify(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    state: Path = typer.Option(DEFAULT_STATE, "--state", "-s"),
+) -> None:
     """Send a test notification through the configured backend."""
     cfg = _load(config)
-    notifier = make_notifier(cfg.notifications)
+    notifier = _build_notifier(cfg, state)
     notifier.send("NightCool test", "If you see this, the notification pipe works.")
     typer.echo("Sent.")
+
+
+@app.command()
+def serve(
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+    state: Path = typer.Option(DEFAULT_STATE, "--state", "-s"),
+) -> None:
+    """Run the HTTP API + PWA host. Pair with `daemon` in a separate process."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    cfg = _load(config)
+    from .web import run_server
+    run_server(cfg, state, config_path=config)
+
+
+@app.command("set-profile")
+def set_profile(
+    name: ProfileName = typer.Argument(..., help="commuter | wfh | night_shift | light_sleeper | aggressive | conservative | custom"),
+    config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
+) -> None:
+    """Rewrite config.yaml with a new schedule profile in place."""
+    raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+    raw.setdefault("user_prefs", {})["profile"] = name.value
+    config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    typer.echo(f"Profile set to {name.value}")
+
+
+@app.command("web-push-keys")
+def web_push_keys() -> None:
+    """Generate a fresh VAPID keypair. Paste into config.yaml under notifications.web_push."""
+    public, private = generate_vapid_keys()
+    typer.echo("Paste into config.yaml under notifications.web_push:")
+    typer.echo("")
+    typer.echo("notifications:")
+    typer.echo("  service: web_push")
+    typer.echo("  web_push:")
+    typer.echo(f"    vapid_public_key: \"{public}\"")
+    typer.echo(f"    vapid_private_key: |")
+    for line in private.splitlines():
+        typer.echo(f"      {line}")
+    typer.echo("    vapid_subject: \"mailto:you@example.com\"")
 
 
 if __name__ == "__main__":
