@@ -1,0 +1,54 @@
+# NightCool example configuration: Denver, with an east-facing landfill (the "dump")
+# in the bad-wind sector. Adjust to your house.
+#
+# Find your lat/lon for the NWS API at: https://api.weather.gov/points/{lat},{lon}
+
+location:
+  latitude: 39.7392
+  longitude: -104.9903
+  timezone: "America/Denver"
+
+user_prefs:
+  sleep_target_f: 65.0           # House should be here when you go to bed.
+  min_tolerable_outdoor_f: 50.0  # Don't open below this — you'll freeze.
+  hysteresis_f: 2.5              # Outdoor must be this much cooler than indoor to open.
+  max_gust_mph: 18.0             # Unsecured windows (loose paperwork) closed above this.
+  max_rain_chance_pct: 20.0      # Exposed windows refuse rain forecasts above this.
+  bad_wind_sector_deg: [60, 120] # East — the dump. Wind from here = stench.
+  quiet_hours_start: "22:30"     # Suppress OPEN notifications after this.
+  quiet_hours_end: "06:00"       # Resume OPEN notifications after this.
+  morning_close_time: "06:30"    # Approximate sunrise + 30 min until v2 ships astral.
+
+indoor_temp:
+  source: "manual"               # manual | sensor_file
+  manual_default_f: 71.0         # Used until you run `nightcool set-indoor <temp>`.
+  sensor_file_path: null         # For sensor_file: path to a file containing a single float.
+
+windows:
+  - id: br_west
+    name: "Master Bedroom West"
+    exposure: exposed
+    security: secure
+    on_bad_wind_sector: false
+  - id: br_north
+    name: "Master Bedroom North"
+    exposure: exposed
+    security: secure
+    on_bad_wind_sector: false
+  - id: office_east
+    name: "Office East"
+    exposure: covered
+    security: unsecure            # Loose paperwork in here.
+    on_bad_wind_sector: true      # Faces the dump.
+  - id: bathroom_upstairs
+    name: "Upstairs Bathroom"
+    exposure: tiled               # Rain is fine.
+    security: secure
+    on_bad_wind_sector: false
+
+notifications:
+  service: "console"              # ntfy | pushover | console
+  ntfy_topic: "nightcool-yourname-random-string"
+  ntfy_server: "https://ntfy.sh"
+  pushover_user_key: null
+  pushover_app_token: null
