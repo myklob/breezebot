@@ -14,6 +14,7 @@ from nightcool.config import (
     NotificationConfig,
     Security,
     UserPrefs,
+    WebServerConfig,
     Window,
 )
 from nightcool.daemon import run_once
@@ -36,7 +37,7 @@ def _cool_forecast(start: datetime) -> list[HourlyForecast]:
     ]
 
 
-def _make_cfg() -> AppConfig:
+def _make_cfg(tmp_path: Path) -> AppConfig:
     return AppConfig(
         location=Location(latitude=39.0, longitude=-104.0, timezone="America/Denver"),
         user_prefs=UserPrefs(
@@ -52,12 +53,13 @@ def _make_cfg() -> AppConfig:
             Window(id="br_west", name="Master West", exposure=Exposure.EXPOSED, security=Security.SECURE),
         ],
         notifications=NotificationConfig(service="console"),
+        web=WebServerConfig(data_log_path=tmp_path / "data.sqlite"),
     )
 
 
 def test_run_once_dedups_repeated_open(tmp_path, capsys):
     state_path = tmp_path / "state.json"
-    cfg = _make_cfg()
+    cfg = _make_cfg(tmp_path)
     # Pre-seed indoor temp so the engine sees 71°F.
     st: dict = {}
     set_indoor_temp(st, 71.0, datetime.now())
@@ -83,3 +85,6 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     # State recorded the OPEN.
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
+
+    # Data log was created and has at least one row.
+    assert (tmp_path / "data.sqlite").exists()

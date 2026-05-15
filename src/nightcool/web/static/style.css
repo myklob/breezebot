@@ -1,0 +1,99 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f4f6f8;
+  --fg: #14202b;
+  --card-bg: #ffffff;
+  --accent: #0b3a55;
+  --hint: #6a7682;
+  --border: #d8dee5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d141b;
+    --fg: #ecf1f7;
+    --card-bg: #18222d;
+    --accent: #6bb7e0;
+    --hint: #92a2b1;
+    --border: #233241;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  background: var(--accent);
+  color: #fff;
+}
+header h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.02em; }
+.readout { font-variant-numeric: tabular-nums; font-size: 1.2rem; }
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  gap: 1rem;
+}
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+}
+.card h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--hint);
+}
+
+#card-action .action-title { font-size: 1.6rem; font-weight: 600; }
+#card-action .action-body { margin-top: 0.25rem; color: var(--hint); }
+#card-action .action-windows { margin-top: 0.5rem; font-weight: 500; }
+#card-action .action-times { margin-top: 0.25rem; color: var(--hint); font-size: 0.9rem; }
+
+form { display: flex; gap: 0.5rem; }
+input[type="number"], select {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 1rem;
+}
+button {
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.hint, .source-note { margin: 0.5rem 0 0 0; color: var(--hint); font-size: 0.9rem; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: right; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--hint); font-weight: 500; }
+
+footer {
+  text-align: center;
+  padding: 1rem;
+  color: var(--hint);
+  font-size: 0.85rem;
+}

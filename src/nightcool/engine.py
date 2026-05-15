@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Literal
 
-from .config import Exposure, Security, UserPrefs, Window
+from .config import Exposure, ScheduleProfile, Security, UserPrefs, Window
 
 
 # Covered windows tolerate heavier rain than exposed ones; tiled ones ignore rain.
@@ -21,7 +21,7 @@ OPEN_LOOKAHEAD_HOURS = 2
 USEFUL_DELTA_OVER_TARGET_F = 5.0
 
 
-Action = Literal["open", "close", "no_change"]
+Action = Literal["open", "close", "no_change", "summary"]
 
 
 @dataclass(frozen=True)
@@ -74,20 +74,35 @@ def _window_eligible(window: Window, hour: HourlyForecast, prefs: UserPrefs) -> 
     return True
 
 
-def _find_open_moment(
-    forecast: list[HourlyForecast], indoor_temp_f: float, prefs: UserPrefs
-) -> HourlyForecast | None:
-    """First hour in the forecast that meets the global open criteria."""
+def _hour_passes_open_criteria(
+    hour: HourlyForecast, indoor_temp_f: float, prefs: UserPrefs, useful_max: float
+) -> bool:
     open_threshold = indoor_temp_f - prefs.hysteresis_f
+    return (
+        hour.temperature_f <= open_threshold
+        and hour.temperature_f >= prefs.min_tolerable_outdoor_f
+        and hour.temperature_f <= useful_max
+        and not _in_bad_sector(hour.wind_direction_deg, prefs.bad_wind_sector_deg)
+    )
+
+
+def _find_open_moment(
+    forecast: list[HourlyForecast],
+    indoor_temp_f: float,
+    prefs: UserPrefs,
+    profile: ScheduleProfile,
+) -> HourlyForecast | None:
+    """First hour in the forecast that meets the global open criteria and is
+    sustained for `profile.sustained_hours_required` consecutive hours."""
     useful_max = prefs.sleep_target_f + USEFUL_DELTA_OVER_TARGET_F
+    streak: list[HourlyForecast] = []
     for hour in forecast:
-        if (
-            hour.temperature_f <= open_threshold
-            and hour.temperature_f >= prefs.min_tolerable_outdoor_f
-            and hour.temperature_f <= useful_max
-            and not _in_bad_sector(hour.wind_direction_deg, prefs.bad_wind_sector_deg)
-        ):
-            return hour
+        if _hour_passes_open_criteria(hour, indoor_temp_f, prefs, useful_max):
+            streak.append(hour)
+            if len(streak) >= profile.sustained_hours_required:
+                return streak[0]
+        else:
+            streak = []
     return None
 
 
@@ -128,25 +143,38 @@ def is_quiet_hours(now: datetime, prefs: UserPrefs) -> bool:
     return t >= start or t < end
 
 
+def _is_weekend(now: datetime) -> bool:
+    """Saturday or Sunday in `now`'s local wall-clock."""
+    return now.weekday() >= 5
+
+
+def _is_before_morning_close(now: datetime, prefs: UserPrefs) -> bool:
+    """`now` is in the early-morning window before morning_close_time."""
+    return now.time() < prefs.morning_close_time
+
+
 def decide_actions(
     indoor_temp_f: float,
     hourly_forecast: list[HourlyForecast],
     windows: list[Window],
     prefs: UserPrefs,
     now: datetime,
+    profile: ScheduleProfile | None = None,
 ) -> Recommendation:
     """Decide whether to open, close, or do nothing.
 
     Pure function. No I/O, no globals. The caller (daemon) handles
     notification dedup and quiet-hours suppression via `should_notify`.
     """
+    profile = profile or prefs.resolved_profile()
+
     if not hourly_forecast:
         return Recommendation("no_change", [], None, None, "No forecast available.")
 
     open_threshold = indoor_temp_f - prefs.hysteresis_f
     current = hourly_forecast[0]
 
-    open_moment = _find_open_moment(hourly_forecast, indoor_temp_f, prefs)
+    open_moment = _find_open_moment(hourly_forecast, indoor_temp_f, prefs, profile)
     if open_moment is not None:
         eligible = [w for w in windows if _window_eligible(w, open_moment, prefs)]
         starts_in = open_moment.timestamp - now
@@ -186,19 +214,71 @@ def should_notify(
     last_action: Action | None,
     now: datetime,
     prefs: UserPrefs,
+    profile: ScheduleProfile | None = None,
 ) -> bool:
-    """Apply dedup + quiet-hours rules to an engine recommendation.
+    """Apply dedup + quiet-hours + profile rules to an engine recommendation.
 
     - Never notify the same action twice in a row (dedup).
     - Quiet hours suppress OPEN but NOT CLOSE (CLOSE can wake you to save cool air).
     - CLOSE only fires if the user was previously told to OPEN.
+    - Profile-aware: commuter skips weekday-morning CLOSE; light-sleeper
+      defers overnight OPENs to the morning summary.
     """
-    if rec.action == "no_change":
+    profile = profile or prefs.resolved_profile()
+
+    if rec.action in ("no_change", "summary"):
         return False
     if rec.action == last_action:
         return False
-    if rec.action == "open" and is_quiet_hours(now, prefs):
-        return False
-    if rec.action == "close" and last_action != "open":
-        return False
-    return True
+    if rec.action == "open":
+        if is_quiet_hours(now, prefs):
+            # Light sleepers want quiet-hours opens queued for a morning summary.
+            return False
+        return True
+    if rec.action == "close":
+        if last_action != "open":
+            return False
+        # Commuter: weekday morning before close-time → they handle it themselves.
+        if (
+            not profile.weekday_morning_close_notify
+            and not _is_weekend(now)
+            and _is_before_morning_close(now, prefs)
+        ):
+            return False
+        if not profile.weekend_close_notify and _is_weekend(now):
+            return False
+        return True
+    return False
+
+
+def summarize_missed_opportunity(
+    forecast: list[HourlyForecast],
+    indoor_temp_f: float,
+    prefs: UserPrefs,
+) -> Recommendation | None:
+    """Build a morning-summary 'you slept through a cooling window' note.
+
+    Light-sleeper users prefer this to a 2am ping. The summary covers any
+    forecast hour that *would have* met the open criteria. Returns None when
+    nothing notable happened.
+    """
+    useful_max = prefs.sleep_target_f + USEFUL_DELTA_OVER_TARGET_F
+    cool_hours = [
+        h for h in forecast
+        if _hour_passes_open_criteria(h, indoor_temp_f, prefs, useful_max)
+    ]
+    if not cool_hours:
+        return None
+    coolest = min(cool_hours, key=lambda h: h.temperature_f)
+    delta = indoor_temp_f - coolest.temperature_f
+    return Recommendation(
+        action="summary",
+        eligible_windows=[],
+        open_at=coolest.timestamp,
+        close_at=None,
+        reason=(
+            f"Overnight low {coolest.temperature_f:.1f}°F at "
+            f"{coolest.timestamp:%H:%M} — {delta:.1f}°F of free cooling "
+            f"if windows had been open."
+        ),
+    )
