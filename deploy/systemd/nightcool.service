@@ -1,0 +1,17 @@
+[Unit]
+Description=NightCool — overnight window cooling notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nightcool
+WorkingDirectory=/opt/nightcool
+ExecStart=/opt/nightcool/.venv/bin/nightcool daemon --config /opt/nightcool/config.yaml --state /opt/nightcool/state.json
+Restart=on-failure
+RestartSec=30s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
