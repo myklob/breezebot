@@ -1,15 +1,7 @@
 // NightCool PWA. Plain ES modules; no framework.
 const $ = (id) => document.getElementById(id);
-
-const PROFILE_HINTS = {
-  commuter: "Skips weekday morning CLOSE — you handle that on the way out.",
-  wfh: "Pings for midday cooling windows too.",
-  night_shift: "Cools the house in the morning before you get home.",
-  light_sleeper: "Holds overnight OPENs for a morning summary.",
-  aggressive: "Opens for any 1°F edge.",
-  conservative: "Only alerts on sustained 3+ hour cool spells.",
-  custom: "Behavior follows the explicit flags in config.yaml.",
-};
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const DAY_LABELS = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
 
 async function refreshState() {
   try {
@@ -27,8 +19,12 @@ function renderState(s) {
   $("indoor-readout").textContent = `${s.indoor_f.toFixed(1)}°F`;
   $("indoor-input").placeholder = s.indoor_f.toFixed(1);
   $("source-note").textContent = `Source: ${s.indoor_source}`;
-  $("profile-select").value = s.profile;
-  $("profile-hint").textContent = PROFILE_HINTS[s.profile] || "";
+  $("address-input").value = s.location.address || "";
+  if (s.location.address) {
+    $("address-note").textContent = s.location.latitude
+      ? `Resolved to (${s.location.latitude.toFixed(4)}, ${s.location.longitude.toFixed(4)}).`
+      : "Used to look up your local NWS forecast.";
+  }
 
   const rec = s.recommendation;
   $("action-title").textContent = rec.title || "No action";
@@ -41,6 +37,14 @@ function renderState(s) {
   if (rec.close_at) times.push(`Close ${new Date(rec.close_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
   $("action-times").textContent = times.join(" → ");
 
+  const wl = $("action-warnings");
+  wl.innerHTML = "";
+  for (const w of rec.warnings || []) {
+    const li = document.createElement("li");
+    li.textContent = w;
+    wl.appendChild(li);
+  }
+
   const tbody = $("forecast-table").querySelector("tbody");
   tbody.innerHTML = "";
   for (const h of s.forecast_head) {
@@ -49,6 +53,49 @@ function renderState(s) {
     tr.innerHTML = `<td>${t}</td><td>${h.temp_f.toFixed(0)}</td><td>${h.wind_mph.toFixed(0)} mph</td><td>${h.rain_pct.toFixed(0)}%</td>`;
     tbody.appendChild(tr);
   }
+}
+
+async function refreshSchedule() {
+  const r = await fetch("/api/schedule");
+  if (!r.ok) return;
+  const sched = await r.json();
+  const tbody = $("schedule-table").querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const day of DAYS) {
+    const d = sched[day];
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${DAY_LABELS[day]}</td>
+      <td><input type="number" data-day="${day}" data-field="target_f" value="${d.target_f}" min="50" max="85" step="1" /></td>
+      <td><input type="time" data-day="${day}" data-field="leave_at" value="${d.leave_at || ''}" ${d.home_all_day ? 'disabled' : ''} /></td>
+      <td><input type="checkbox" data-day="${day}" data-field="home_all_day" ${d.home_all_day ? 'checked' : ''} /></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  tbody.querySelectorAll("input").forEach((el) => {
+    el.addEventListener("change", onScheduleEdit);
+  });
+}
+
+async function onScheduleEdit(e) {
+  const el = e.target;
+  const day = el.dataset.day;
+  const field = el.dataset.field;
+  const row = el.closest("tr");
+  const payload = {};
+  if (field === "target_f") payload.target_f = parseFloat(el.value);
+  if (field === "leave_at") payload.leave_at = el.value || "";
+  if (field === "home_all_day") {
+    payload.home_all_day = el.checked;
+    if (el.checked) row.querySelector('[data-field="leave_at"]').disabled = true;
+    else row.querySelector('[data-field="leave_at"]').disabled = false;
+  }
+  await fetch(`/api/schedule/${day}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await refreshState();
 }
 
 async function refreshSavings() {
@@ -82,18 +129,23 @@ $("indoor-form").addEventListener("submit", async (e) => {
   await refreshState();
 });
 
-$("profile-select").addEventListener("change", async (e) => {
-  const profile = e.target.value;
-  const r = await fetch("/api/profile", {
+$("address-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const address = $("address-input").value.trim();
+  if (!address) return;
+  $("address-note").textContent = "Resolving…";
+  const r = await fetch("/api/geocode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ profile }),
+    body: JSON.stringify({ address }),
   });
   if (!r.ok) {
-    setStatus("Profile change refused (server has no config path).");
+    const err = await r.json().catch(() => ({ detail: "geocode failed" }));
+    $("address-note").textContent = err.detail || "Geocode failed.";
     return;
   }
-  $("profile-hint").textContent = PROFILE_HINTS[profile] || "";
+  const data = await r.json();
+  $("address-note").textContent = `Resolved to (${data.latitude.toFixed(4)}, ${data.longitude.toFixed(4)}).`;
   await refreshState();
 });
 
@@ -144,7 +196,6 @@ async function enablePush() {
 
 $("enable-push").addEventListener("click", enablePush);
 
-// Reflect existing subscription, if any.
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.getRegistration().then(async (reg) => {
     if (!reg) return;
@@ -154,6 +205,7 @@ if ("serviceWorker" in navigator) {
 }
 
 refreshState();
+refreshSchedule();
 refreshSavings();
 setInterval(refreshState, 5 * 60 * 1000);
 setInterval(refreshSavings, 30 * 60 * 1000);

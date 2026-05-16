@@ -1,33 +1,51 @@
-# NightCool example configuration: Denver, with an east-facing landfill (the "dump")
-# in the bad-wind sector. Adjust to your house.
+# NightCool example configuration.
 #
-# Find your lat/lon for the NWS API at: https://api.weather.gov/points/{lat},{lon}
+# Quick-start: change `location.address` and the `windows` list to match your
+# house, then `nightcool serve` and edit the rest from the web UI.
 
 location:
-  latitude: 39.7392
-  longitude: -104.9903
-  timezone: "America/Denver"
+  address: "1600 Pennsylvania Ave NW, Washington DC"
+  # latitude/longitude get filled in automatically once we geocode the address.
+  # latitude: 38.8977
+  # longitude: -77.0365
+  timezone: "America/New_York"
 
-user_prefs:
-  sleep_target_f: 65.0           # House should be here when you go to bed.
-  min_tolerable_outdoor_f: 50.0  # Don't open below this — you'll freeze.
-  hysteresis_f: 2.5              # Outdoor must be this much cooler than indoor to open.
-  max_gust_mph: 18.0             # Unsecured windows (loose paperwork) closed above this.
-  max_rain_chance_pct: 20.0      # Exposed windows refuse rain forecasts above this.
-  bad_wind_sector_deg: [60, 120] # East — the dump. Wind from here = stench.
-  quiet_hours_start: "22:30"     # Suppress OPEN notifications after this.
-  quiet_hours_end: "06:00"       # Resume OPEN notifications after this.
-  morning_close_time: "06:30"    # Approximate sunrise + 30 min until v2 ships astral.
-  # Schedule preset: commuter | wfh | night_shift | light_sleeper | aggressive | conservative | custom
-  # Each preset bundles a set of behavior flags described in README → Schedule profiles.
-  profile: "commuter"
-  # Optional: per-field overrides on top of the preset.
-  profile_overrides: {}
+# Per-day comfort target and routine.
+# `target_f`     — the temperature you'd like the house to be at.
+# `leave_at`     — typical departure time. If a CLOSE recommendation falls
+#                  before this on a weekday, the app skips the notification
+#                  on the assumption that you'll close on the way out.
+# `home_all_day` — when true (weekends, days off), skip the leave-time logic.
+schedule:
+  mon: { target_f: 68, leave_at: "07:30" }
+  tue: { target_f: 68, leave_at: "07:30" }
+  wed: { target_f: 68, leave_at: "07:30" }
+  thu: { target_f: 68, leave_at: "07:30" }
+  fri: { target_f: 68, leave_at: "07:30" }
+  sat: { target_f: 68, home_all_day: true }
+  sun: { target_f: 68, home_all_day: true }
+
+comfort_floor:
+  min_indoor_f: 60.0  # Don't let the house drop below this overnight.
+
+prefs:
+  hysteresis_f: 2.5            # Outdoor must be this much cooler than indoor.
+  min_tolerable_outdoor_f: 50  # Don't open below this — too cold regardless.
+  quiet_hours_start: "22:30"   # Suppress OPEN notifications after this.
+  quiet_hours_end: "06:00"     # Resume after this.
+
+# All-optional secondary alerts. Defaults are off; flip on only what you care about.
+warnings:
+  warn_on_rain: false
+  max_rain_chance_pct: 20.0
+  warn_on_gusts: false        # Useful if loose papers, curtains, or allergies.
+  max_gust_mph: 18.0
+  bad_wind_sector_deg: null   # [lo, hi] degrees — e.g., [60, 120] to block easterly wind.
 
 indoor_temp:
-  source: "manual"               # manual | sensor_file | nest | ble
-  manual_default_f: 71.0         # Used until you run `nightcool set-indoor <temp>`.
-  sensor_file_path: null         # For sensor_file: path to a file containing a single float.
+  source: "manual"            # manual | sensor_file | nest | ble
+  manual_default_f: 71.0
+  sensor_file_path: null
   # nest:
   #   project_id: ""
   #   client_id: ""
@@ -49,29 +67,24 @@ windows:
     exposure: exposed
     security: secure
     on_bad_wind_sector: false
-  - id: office_east
-    name: "Office East"
-    exposure: covered
-    security: unsecure            # Loose paperwork in here.
-    on_bad_wind_sector: true      # Faces the dump.
   - id: bathroom_upstairs
     name: "Upstairs Bathroom"
-    exposure: tiled               # Rain is fine.
+    exposure: tiled
     security: secure
     on_bad_wind_sector: false
 
 notifications:
-  service: "console"              # ntfy | pushover | console | web_push
+  service: "console"          # ntfy | pushover | console | web_push
   ntfy_topic: "nightcool-yourname-random-string"
   ntfy_server: "https://ntfy.sh"
   pushover_user_key: null
   pushover_app_token: null
-  # web_push:                     # Run `nightcool web-push-keys` to generate.
+  # web_push:                 # Run `nightcool web-push-keys` to generate.
   #   vapid_public_key: ""
   #   vapid_private_key: ""
   #   vapid_subject: "mailto:you@example.com"
 
 web:
-  host: "127.0.0.1"               # Bind only to loopback by default.
+  host: "127.0.0.1"
   port: 8765
   data_log_path: "data_log.sqlite"

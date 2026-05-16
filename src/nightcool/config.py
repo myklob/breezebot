@@ -14,6 +14,9 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 
+WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
 class Exposure(str, Enum):
     """Where rain ends up if it hits this window."""
 
@@ -29,130 +32,126 @@ class Security(str, Enum):
     UNSECURE = "unsecure"
 
 
-class ProfileName(str, Enum):
-    """Built-in schedule presets.
-
-    Each preset bundles a set of behavior flags that shape the daily
-    notification cadence. A user picks one and optionally overrides
-    individual fields under `user_prefs`.
-    """
-
-    COMMUTER = "commuter"
-    WFH = "wfh"
-    NIGHT_SHIFT = "night_shift"
-    LIGHT_SLEEPER = "light_sleeper"
-    AGGRESSIVE = "aggressive"
-    CONSERVATIVE = "conservative"
-    CUSTOM = "custom"
-
-
 class Location(BaseModel):
-    """House location (used by the NWS provider)."""
+    """Where the house is.
 
-    latitude: float = Field(..., ge=-90, le=90)
-    longitude: float = Field(..., ge=-180, le=180)
-    timezone: str
-
-
-class ScheduleProfile(BaseModel):
-    """Behavior flags that shape notification cadence.
-
-    Defaults match the original v1 behavior (close notifications always fire,
-    only overnight openings are considered, no morning summary). Presets
-    flip these flags; callers can also set them by hand under
-    `user_prefs.profile_overrides`.
+    You can give either an `address` (we'll geocode it via the US Census
+    Geocoder) or explicit `latitude`/`longitude`. If you give both, the
+    coordinates win and the address is informational.
     """
 
-    name: ProfileName = ProfileName.CUSTOM
-    weekday_morning_close_notify: bool = True
-    """When false, suppress the weekday CLOSE ping before morning_close_time;
-    the commuter closes on the way out anyway."""
+    address: str | None = None
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    timezone: str = "America/Denver"
 
-    weekend_close_notify: bool = True
-    """When false, also suppress weekend CLOSE pings (rare; for night-shift)."""
-
-    daytime_open_check: bool = False
-    """When true, scan for daytime cooling opportunities too, not just
-    pre-bedtime. Useful for WFH/retiree users home during the day."""
-
-    defer_overnight_opens_to_summary: bool = False
-    """Light sleepers: drop OPEN notifications that fire inside quiet hours
-    and surface them as a morning summary instead."""
-
-    morning_summary_time: time = time(7, 30)
-    """When `defer_overnight_opens_to_summary`, emit the summary at this
-    local time."""
-
-    sustained_hours_required: int = 1
-    """Conservative users: require at least N consecutive hours of cool
-    air in the forecast before alerting."""
-
-    inverted_sleep_schedule: bool = False
-    """Night-shift workers sleep during the day; flip the role of quiet
-    hours and morning_close_time. (Reserved; engine consumes the same
-    quiet_hours fields — set them to match your sleep window.)"""
+    @field_validator("longitude")
+    @classmethod
+    def _have_some_location(cls, v: float | None, info) -> float | None:
+        # Note: pydantic v2 validators run per-field; this only catches the case
+        # where the user supplies one half of a coordinate pair. Cross-field
+        # "must have address or coordinates" is enforced in AppConfig.
+        return v
 
 
-PROFILE_PRESETS: dict[ProfileName, ScheduleProfile] = {
-    ProfileName.COMMUTER: ScheduleProfile(
-        name=ProfileName.COMMUTER,
-        weekday_morning_close_notify=False,
-        weekend_close_notify=True,
-        daytime_open_check=False,
-    ),
-    ProfileName.WFH: ScheduleProfile(
-        name=ProfileName.WFH,
-        weekday_morning_close_notify=True,
-        daytime_open_check=True,
-    ),
-    ProfileName.NIGHT_SHIFT: ScheduleProfile(
-        name=ProfileName.NIGHT_SHIFT,
-        weekday_morning_close_notify=True,
-        daytime_open_check=True,
-        inverted_sleep_schedule=True,
-    ),
-    ProfileName.LIGHT_SLEEPER: ScheduleProfile(
-        name=ProfileName.LIGHT_SLEEPER,
-        weekday_morning_close_notify=True,
-        defer_overnight_opens_to_summary=True,
-    ),
-    ProfileName.AGGRESSIVE: ScheduleProfile(
-        name=ProfileName.AGGRESSIVE,
-        weekday_morning_close_notify=True,
-        daytime_open_check=True,
-        sustained_hours_required=1,
-    ),
-    ProfileName.CONSERVATIVE: ScheduleProfile(
-        name=ProfileName.CONSERVATIVE,
-        weekday_morning_close_notify=True,
-        sustained_hours_required=3,
-    ),
-    ProfileName.CUSTOM: ScheduleProfile(name=ProfileName.CUSTOM),
-}
+class DaySchedule(BaseModel):
+    """One day's comfort target and routine.
+
+    `target_f` is the temperature you'd like the house to be at by the
+    time you wake up (or, on `home_all_day` days, throughout the day).
+    `leave_at` is the time you typically leave the house — if a CLOSE
+    opportunity falls before this time on a weekday, NightCool assumes
+    you'll close on the way out and skips the notification. Set
+    `home_all_day` for weekends, days off, or WFH days; the app then
+    also looks for daytime cooling opportunities.
+    """
+
+    target_f: float = 65.0
+    leave_at: time | None = None
+    home_all_day: bool = False
 
 
-# Per-profile tunings that override UserPrefs numeric defaults. Anything
-# the user sets explicitly under `user_prefs` wins over these.
-PROFILE_PREFS_OVERRIDES: dict[ProfileName, dict[str, float]] = {
-    ProfileName.AGGRESSIVE: {"hysteresis_f": 1.0},
-    ProfileName.CONSERVATIVE: {"hysteresis_f": 5.0},
-}
+def _default_schedule() -> "DailySchedule":
+    """A reasonable starter schedule: 65 °F, 7:30 weekday departures,
+    home all weekend."""
+    weekday = DaySchedule(target_f=65.0, leave_at=time(7, 30))
+    weekend = DaySchedule(target_f=65.0, home_all_day=True)
+    return DailySchedule(
+        mon=weekday, tue=weekday, wed=weekday, thu=weekday, fri=weekday,
+        sat=weekend, sun=weekend,
+    )
 
 
-class UserPrefs(BaseModel):
-    """Comfort/safety thresholds and quiet-hours window."""
+class DailySchedule(BaseModel):
+    """A target + routine for each day of the week."""
 
-    sleep_target_f: float
-    min_tolerable_outdoor_f: float
+    mon: DaySchedule = Field(default_factory=DaySchedule)
+    tue: DaySchedule = Field(default_factory=DaySchedule)
+    wed: DaySchedule = Field(default_factory=DaySchedule)
+    thu: DaySchedule = Field(default_factory=DaySchedule)
+    fri: DaySchedule = Field(default_factory=DaySchedule)
+    sat: DaySchedule = Field(default_factory=lambda: DaySchedule(home_all_day=True))
+    sun: DaySchedule = Field(default_factory=lambda: DaySchedule(home_all_day=True))
+
+    def for_weekday(self, weekday: int) -> DaySchedule:
+        """Look up the schedule for Python's `datetime.weekday()` (Mon=0)."""
+        return getattr(self, WEEKDAY_KEYS[weekday % 7])
+
+
+class ComfortFloor(BaseModel):
+    """The "don't let the house get too cold" guard.
+
+    When NightCool predicts that opening the windows would let indoor
+    temperature drop below `min_indoor_f`, it shortens the close-by
+    time so the house stops at the floor — or suppresses the OPEN
+    entirely if even a brief opening would overshoot.
+    """
+
+    min_indoor_f: float = 60.0
+
+
+class Prefs(BaseModel):
+    """House-wide knobs that don't fit the daily schedule."""
+
     hysteresis_f: float = 2.5
-    max_gust_mph: float = 18.0
-    max_rain_chance_pct: float = 20.0
-    bad_wind_sector_deg: tuple[float, float] | None = None
+    """Outdoor must be this much cooler than indoor to qualify as a
+    cooling opportunity. Prevents flapping on tiny deltas."""
+
+    min_tolerable_outdoor_f: float = 50.0
+    """Hard floor on outdoor temperature regardless of indoor temp;
+    nobody wants air this cold blowing in."""
+
     quiet_hours_start: time = time(22, 30)
+    """Suppress OPEN notifications after this local time."""
+
     quiet_hours_end: time = time(6, 0)
-    morning_close_time: time = time(6, 30)  # Approximate "sunrise + 30 min" until v2.
-    profile: ProfileName = ProfileName.CUSTOM
-    profile_overrides: dict[str, object] = Field(default_factory=dict)
+    """Resume OPEN notifications after this local time."""
+
+
+class WarningPrefs(BaseModel):
+    """Opt-in alerts about *secondary* concerns while windows are open.
+
+    All of these default to "off" (None / False) — turn on only the ones
+    that matter to your house.
+    """
+
+    warn_on_rain: bool = False
+    """If true, exposed windows are excluded when rain chance exceeds
+    `max_rain_chance_pct`."""
+
+    max_rain_chance_pct: float = 20.0
+
+    warn_on_gusts: bool = False
+    """If true, windows marked `unsecure` (loose paperwork, light
+    curtains) are excluded when forecast gusts exceed `max_gust_mph`."""
+
+    max_gust_mph: float = 18.0
+
+    bad_wind_sector_deg: tuple[float, float] | None = None
+    """Set to [lo, hi] degrees if you have a wind direction you don't
+    want air coming from — neighbor's smoking, a landfill, a road, an
+    allergen source. Wraps around: [350, 10] covers the 20° arc around
+    true north."""
 
     @field_validator("bad_wind_sector_deg")
     @classmethod
@@ -163,13 +162,6 @@ class UserPrefs(BaseModel):
         if not (0 <= lo < 360 and 0 <= hi < 360):
             raise ValueError("bad_wind_sector_deg values must be in [0, 360)")
         return v
-
-    def resolved_profile(self) -> ScheduleProfile:
-        """Return the preset for `self.profile`, with per-field overrides
-        from `profile_overrides` applied on top."""
-        base = PROFILE_PRESETS[self.profile].model_dump()
-        base.update(self.profile_overrides or {})
-        return ScheduleProfile.model_validate(base)
 
 
 class IndoorSourceKind(str, Enum):
@@ -270,10 +262,13 @@ class AppConfig(BaseModel):
     """Top-level config: a complete description of the install."""
 
     location: Location
-    user_prefs: UserPrefs
-    indoor_temp: IndoorTempConfig
+    schedule: DailySchedule = Field(default_factory=_default_schedule)
+    comfort_floor: ComfortFloor = Field(default_factory=ComfortFloor)
+    prefs: Prefs = Field(default_factory=Prefs)
+    warnings: WarningPrefs = Field(default_factory=WarningPrefs)
+    indoor_temp: IndoorTempConfig = Field(default_factory=IndoorTempConfig)
     windows: list[Window]
-    notifications: NotificationConfig
+    notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     web: WebServerConfig = Field(default_factory=WebServerConfig)
 
     @field_validator("windows")
@@ -283,19 +278,6 @@ class AppConfig(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("window ids must be unique")
         return v
-
-    def effective_prefs(self) -> UserPrefs:
-        """Apply profile preset numeric overrides where the user did not
-        already set a value explicitly. Returns a new UserPrefs."""
-        overrides = PROFILE_PREFS_OVERRIDES.get(self.user_prefs.profile, {})
-        if not overrides:
-            return self.user_prefs
-        data = self.user_prefs.model_dump()
-        explicit = set(self.user_prefs.model_fields_set)
-        for key, val in overrides.items():
-            if key not in explicit:
-                data[key] = val
-        return UserPrefs.model_validate(data)
 
 
 def load_config(path: Path) -> AppConfig:
