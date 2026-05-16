@@ -22,6 +22,7 @@
       <div class="action-body" id="action-body"></div>
       <div class="action-windows" id="action-windows"></div>
       <div class="action-times" id="action-times"></div>
+      <ul class="warnings" id="action-warnings"></ul>
     </section>
 
     <section class="card">
@@ -34,17 +35,21 @@
     </section>
 
     <section class="card">
-      <h2>Schedule profile</h2>
-      <select id="profile-select">
-        <option value="commuter">Commuter</option>
-        <option value="wfh">Work-from-home / retiree</option>
-        <option value="night_shift">Night shift</option>
-        <option value="light_sleeper">Light sleeper</option>
-        <option value="aggressive">Aggressive cooler</option>
-        <option value="conservative">Conservative</option>
-        <option value="custom">Custom</option>
-      </select>
-      <p class="hint" id="profile-hint"></p>
+      <h2>Address</h2>
+      <form id="address-form">
+        <input id="address-input" type="text" placeholder="1234 Main St, Denver CO" required>
+        <button type="submit">Save</button>
+      </form>
+      <p class="hint" id="address-note">Used to look up your local NWS forecast.</p>
+    </section>
+
+    <section class="card">
+      <h2>Weekly schedule</h2>
+      <p class="hint">Target temperature and typical departure time per day. Mark a day "home all day" to skip the leave-time logic.</p>
+      <table id="schedule-table">
+        <thead><tr><th>Day</th><th>Target °F</th><th>Leave at</th><th>Home</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </section>
 
     <section class="card">

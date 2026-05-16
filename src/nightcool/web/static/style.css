@@ -62,6 +62,8 @@ main {
 #card-action .action-body { margin-top: 0.25rem; color: var(--hint); }
 #card-action .action-windows { margin-top: 0.5rem; font-weight: 500; }
 #card-action .action-times { margin-top: 0.25rem; color: var(--hint); font-size: 0.9rem; }
+.warnings { margin: 0.5rem 0 0 1rem; padding: 0; color: #c08400; font-size: 0.9rem; }
+.warnings li { margin-top: 0.2rem; }
 
 form { display: flex; gap: 0.5rem; }
 input[type="number"], select {

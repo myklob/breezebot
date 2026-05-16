@@ -8,12 +8,13 @@ from unittest.mock import patch
 
 from nightcool.config import (
     AppConfig,
+    DailySchedule,
+    DaySchedule,
     Exposure,
     IndoorTempConfig,
     Location,
     NotificationConfig,
     Security,
-    UserPrefs,
     WebServerConfig,
     Window,
 )
@@ -38,15 +39,12 @@ def _cool_forecast(start: datetime) -> list[HourlyForecast]:
 
 
 def _make_cfg(tmp_path: Path) -> AppConfig:
+    weekend = DaySchedule(target_f=65.0, home_all_day=True)
     return AppConfig(
         location=Location(latitude=39.0, longitude=-104.0, timezone="America/Denver"),
-        user_prefs=UserPrefs(
-            sleep_target_f=65.0,
-            min_tolerable_outdoor_f=50.0,
-            hysteresis_f=2.5,
-            bad_wind_sector_deg=(60.0, 120.0),
-            quiet_hours_start=time(22, 30),
-            quiet_hours_end=time(6, 0),
+        schedule=DailySchedule(
+            mon=weekend, tue=weekend, wed=weekend, thu=weekend, fri=weekend,
+            sat=weekend, sun=weekend,
         ),
         indoor_temp=IndoorTempConfig(source="manual", manual_default_f=71.0),
         windows=[
@@ -60,12 +58,10 @@ def _make_cfg(tmp_path: Path) -> AppConfig:
 def test_run_once_dedups_repeated_open(tmp_path, capsys):
     state_path = tmp_path / "state.json"
     cfg = _make_cfg(tmp_path)
-    # Pre-seed indoor temp so the engine sees 71°F.
     st: dict = {}
     set_indoor_temp(st, 71.0, datetime.now())
     write_state(state_path, st)
 
-    # Use a fixed "now" inside daytime (not quiet hours).
     fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
     provider = MockWeatherProvider(_cool_forecast(fake_now))
 
@@ -78,13 +74,9 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     assert rec1.action == "open"
     assert rec2.action == "open"
 
-    # Console notifier prints; after the dedup, only one print happens.
     captured = capsys.readouterr().out
     assert captured.count("OPEN:") == 1
 
-    # State recorded the OPEN.
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
-
-    # Data log was created and has at least one row.
     assert (tmp_path / "data.sqlite").exists()

@@ -15,6 +15,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .config import AppConfig
 from .engine import Recommendation, decide_actions, should_notify
+from .geocode import GeocodeError, geocode
 from .notifier import make_notifier
 from .sources import make_source, read_indoor_with_fallback
 from .state import (
@@ -36,6 +37,29 @@ FORECAST_HOURS = 12
 logger = logging.getLogger("nightcool.daemon")
 
 
+def resolve_coordinates(cfg: AppConfig, state: dict[str, Any]) -> tuple[float, float]:
+    """Return (lat, lon) for `cfg.location`. Geocodes the address on demand
+    and caches the result in `state` so subsequent calls don't re-hit the API."""
+    if cfg.location.latitude is not None and cfg.location.longitude is not None:
+        return cfg.location.latitude, cfg.location.longitude
+
+    if not cfg.location.address:
+        raise ValueError("location requires either coordinates or an address")
+
+    cache = state.get("location_cache") or {}
+    if cache.get("address") == cfg.location.address:
+        return float(cache["latitude"]), float(cache["longitude"])
+
+    result = geocode(cfg.location.address)
+    state["location_cache"] = {
+        "address": cfg.location.address,
+        "latitude": result.latitude,
+        "longitude": result.longitude,
+        "matched_address": result.matched_address,
+    }
+    return result.latitude, result.longitude
+
+
 def read_indoor_temp(cfg: AppConfig, state: dict[str, Any]) -> tuple[float, str]:
     """Resolve indoor temperature using the configured source chain."""
     manual_reader = lambda: get_indoor_temp_or_none(state)
@@ -47,7 +71,10 @@ def format_notification(rec: Recommendation) -> tuple[str, str]:
     """Build (title, body) for a recommendation."""
     if rec.action == "open":
         title = f"OPEN: {', '.join(rec.eligible_windows)}"
-        return title, rec.reason
+        body = rec.reason
+        if rec.warnings:
+            body = body + " " + " ".join(rec.warnings)
+        return title, body
     if rec.action == "close":
         return "CLOSE windows", rec.reason
     if rec.action == "summary":
@@ -72,6 +99,11 @@ def _build_notifier(cfg: AppConfig, state_path: Path):
     )
 
 
+def _make_provider(cfg: AppConfig, state: dict[str, Any]) -> WeatherProvider:
+    lat, lon = resolve_coordinates(cfg, state)
+    return NWSProvider(lat, lon)
+
+
 def run_once(
     cfg: AppConfig,
     state_path: Path,
@@ -82,13 +114,22 @@ def run_once(
     now = datetime.now(tz)
     state = read_state(state_path)
     indoor, source_name = read_indoor_temp(cfg, state)
-    provider = provider or NWSProvider(cfg.location.latitude, cfg.location.longitude)
+    if provider is None:
+        try:
+            provider = _make_provider(cfg, state)
+        except GeocodeError as e:
+            logger.error("Could not geocode location: %s", e)
+            return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
+        # Persist any newly-cached coordinates.
+        write_state(state_path, state)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
-    prefs = cfg.effective_prefs()
-    profile = prefs.resolved_profile()
-    rec = decide_actions(indoor, forecast, cfg.windows, prefs, now, profile=profile)
+    rec = decide_actions(
+        indoor, forecast, cfg.windows, now,
+        schedule=cfg.schedule, prefs=cfg.prefs,
+        comfort_floor=cfg.comfort_floor, warnings=cfg.warnings,
+    )
     last = get_last_action(state)
-    if should_notify(rec, last, now, prefs, profile=profile):
+    if should_notify(rec, last, now, schedule=cfg.schedule, prefs=cfg.prefs):
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
@@ -126,7 +167,7 @@ def _log_observation(
                     wind_mph=cur.wind_speed_mph if cur else None,
                     rain_pct=cur.rain_chance_pct if cur else None,
                     action=action,
-                    windows_open=None,  # User confirmation lives in v2.
+                    windows_open=None,
                     hvac_active=None,
                     indoor_source=source_name,
                 ),

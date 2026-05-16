@@ -1,39 +1,36 @@
 """FastAPI app exposing the engine to the PWA.
 
-The daemon is the source of truth for notifications; this server provides:
-
-  GET  /api/state         current rec + indoor temp + profile + forecast head
+  GET  /api/state         current rec + indoor temp + today's target + forecast head
   GET  /api/forecast      full hourly forecast
+  GET  /api/schedule      full 7-day schedule
+  POST /api/schedule/{day}  update one day's target/leave_at/home_all_day
   POST /api/indoor-temp   user updates indoor temp (manual source)
-  POST /api/profile       switch schedule profile
+  POST /api/geocode       resolve an address to coordinates and persist
   GET  /api/vapid-public  VAPID public key (for the PWA's subscribe step)
   POST /api/subscribe     register a browser push subscription
   POST /api/unsubscribe   remove one
   GET  /api/savings       model + savings estimate (or `{model: null}`)
   GET  /                  the PWA itself
   GET  /static/*          PWA assets
-
-The server reuses the same `config.yaml` + `state.json` files as the
-daemon; running both in parallel is fine because state.json writes are
-small and rare.
 """
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..config import AppConfig, ProfileName
-from ..daemon import format_notification, read_indoor_temp
+from ..config import WEEKDAY_KEYS, AppConfig
+from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
 from ..engine import decide_actions, summarize_missed_opportunity
+from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
     list_subscriptions,
@@ -54,8 +51,14 @@ class IndoorTempIn(BaseModel):
     temperature_f: float = Field(..., gt=-50, lt=150)
 
 
-class ProfileIn(BaseModel):
-    profile: ProfileName
+class GeocodeIn(BaseModel):
+    address: str = Field(..., min_length=3)
+
+
+class DayIn(BaseModel):
+    target_f: float | None = Field(default=None, gt=40, lt=100)
+    leave_at: str | None = None  # "HH:MM" or null
+    home_all_day: bool | None = None
 
 
 class SubscriptionIn(BaseModel):
@@ -75,34 +78,49 @@ def create_app(
     config_path: Path | None = None,
     provider: WeatherProvider | None = None,
 ) -> FastAPI:
-    """Build the FastAPI app. `provider` is injectable for tests."""
-    app = FastAPI(title="NightCool", version="0.2.0")
+    app = FastAPI(title="NightCool", version="0.3.0")
 
     def get_provider() -> WeatherProvider:
-        return provider or NWSProvider(cfg.location.latitude, cfg.location.longitude)
+        if provider is not None:
+            return provider
+        state = read_state(state_path)
+        lat, lon = resolve_coordinates(cfg, state)
+        write_state(state_path, state)
+        return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
         return datetime.now(ZoneInfo(cfg.location.timezone))
+
+    def _save_config() -> None:
+        """Persist the current cfg back to config.yaml. Requires config_path."""
+        if config_path is None:
+            raise HTTPException(409, "Server started without a config path; cannot persist.")
+        data = cfg.model_dump(mode="json", exclude_none=True)
+        config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     @app.get("/api/state")
     def get_state() -> dict[str, Any]:
         state = read_state(state_path)
         indoor, source_name = read_indoor_temp(cfg, state)
         forecast = get_provider().hourly_forecast(hours=12)
-        prefs = cfg.effective_prefs()
-        profile = prefs.resolved_profile()
-        rec = decide_actions(indoor, forecast, cfg.windows, prefs, now_local(), profile=profile)
+        now = now_local()
+        rec = decide_actions(
+            indoor, forecast, cfg.windows, now,
+            schedule=cfg.schedule, prefs=cfg.prefs,
+            comfort_floor=cfg.comfort_floor, warnings=cfg.warnings,
+        )
         title, body = format_notification(rec)
-        summary = None
-        if profile.defer_overnight_opens_to_summary:
-            s = summarize_missed_opportunity(forecast, indoor, prefs)
-            if s is not None:
-                summary = {"open_at": s.open_at.isoformat() if s.open_at else None, "reason": s.reason}
+        today = cfg.schedule.for_weekday(now.weekday())
         return {
-            "now": now_local().isoformat(),
+            "now": now.isoformat(),
             "indoor_f": indoor,
             "indoor_source": source_name,
-            "profile": profile.name.value,
+            "today": {
+                "weekday": WEEKDAY_KEYS[now.weekday()],
+                "target_f": today.target_f,
+                "leave_at": today.leave_at.isoformat() if today.leave_at else None,
+                "home_all_day": today.home_all_day,
+            },
             "recommendation": {
                 "action": rec.action,
                 "title": title,
@@ -110,8 +128,8 @@ def create_app(
                 "windows": rec.eligible_windows,
                 "open_at": rec.open_at.isoformat() if rec.open_at else None,
                 "close_at": rec.close_at.isoformat() if rec.close_at else None,
+                "warnings": rec.warnings or [],
             },
-            "morning_summary": summary,
             "forecast_head": [
                 {
                     "ts": h.timestamp.isoformat(),
@@ -121,6 +139,11 @@ def create_app(
                 }
                 for h in forecast[:6]
             ],
+            "location": {
+                "address": cfg.location.address,
+                "latitude": cfg.location.latitude,
+                "longitude": cfg.location.longitude,
+            },
         }
 
     @app.get("/api/forecast")
@@ -140,6 +163,42 @@ def create_app(
             ]
         }
 
+    @app.get("/api/schedule")
+    def get_schedule() -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key in WEEKDAY_KEYS:
+            day = getattr(cfg.schedule, key)
+            out[key] = {
+                "target_f": day.target_f,
+                "leave_at": day.leave_at.isoformat() if day.leave_at else None,
+                "home_all_day": day.home_all_day,
+            }
+        return out
+
+    @app.post("/api/schedule/{day}")
+    def post_schedule_day(day: str, payload: DayIn) -> dict[str, Any]:
+        if day not in WEEKDAY_KEYS:
+            raise HTTPException(400, f"unknown day {day!r}")
+        current = getattr(cfg.schedule, day)
+        new_target = payload.target_f if payload.target_f is not None else current.target_f
+        new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
+        if payload.leave_at is None:
+            new_leave = current.leave_at if payload.home_all_day is None else None
+        elif payload.leave_at == "":
+            new_leave = None
+        else:
+            new_leave = time.fromisoformat(payload.leave_at)
+        if new_home:
+            new_leave = None
+        from ..config import DaySchedule
+        setattr(cfg.schedule, day, DaySchedule(
+            target_f=new_target,
+            leave_at=new_leave,
+            home_all_day=new_home,
+        ))
+        _save_config()
+        return {"ok": True, "day": day}
+
     @app.post("/api/indoor-temp")
     def post_indoor_temp(payload: IndoorTempIn) -> dict[str, Any]:
         st = read_state(state_path)
@@ -147,21 +206,27 @@ def create_app(
         write_state(state_path, st)
         return {"ok": True, "indoor_f": payload.temperature_f}
 
-    @app.post("/api/profile")
-    def post_profile(payload: ProfileIn) -> dict[str, Any]:
-        if config_path is None:
-            raise HTTPException(
-                status_code=409,
-                detail="Server started without a config path; profile changes not persisted.",
-            )
-        # Rewrite config.yaml in place, preserving everything else by reading
-        # raw YAML rather than round-tripping through the model.
-        import yaml
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        raw.setdefault("user_prefs", {})["profile"] = payload.profile.value
-        config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
-        cfg.user_prefs.profile = payload.profile
-        return {"ok": True, "profile": payload.profile.value}
+    @app.post("/api/geocode")
+    def post_geocode(payload: GeocodeIn) -> dict[str, Any]:
+        try:
+            result = do_geocode(payload.address)
+        except GeocodeError as e:
+            raise HTTPException(400, str(e))
+        cfg.location.address = result.matched_address
+        cfg.location.latitude = result.latitude
+        cfg.location.longitude = result.longitude
+        if config_path is not None:
+            _save_config()
+        # Clear the cache so the next poll re-resolves.
+        st = read_state(state_path)
+        st.pop("location_cache", None)
+        write_state(state_path, st)
+        return {
+            "ok": True,
+            "matched_address": result.matched_address,
+            "latitude": result.latitude,
+            "longitude": result.longitude,
+        }
 
     @app.get("/api/vapid-public")
     def get_vapid_public() -> dict[str, Any]:
@@ -199,9 +264,6 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        # Heuristic: count every "open" recommendation as ~6 hours of avoided
-        # AC runtime. Replace with a model-derived estimate once we have
-        # window-confirmation telemetry from the user.
         open_actions = sum(1 for o in obs if o.action == "open")
         kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
         return {
@@ -227,8 +289,6 @@ def create_app(
 
         @app.get("/sw.js")
         def service_worker() -> FileResponse:
-            # Service workers must be served from the same scope they control,
-            # so it can't live under /static/.
             return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
 
         @app.get("/manifest.webmanifest")
@@ -243,7 +303,6 @@ def create_app(
 
 
 def run_server(cfg: AppConfig, state_path: Path, config_path: Path | None = None) -> None:
-    """Block forever serving the API + PWA on the configured host/port."""
     import uvicorn
     app = create_app(cfg, state_path, config_path=config_path)
     uvicorn.run(app, host=cfg.web.host, port=cfg.web.port, log_level="info")
