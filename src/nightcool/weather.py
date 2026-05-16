@@ -99,7 +99,8 @@ class NWSProvider(WeatherProvider):
                     return r.json()
                 except httpx.HTTPError as e:
                     last_exc = e
-            assert last_exc is not None
+            if last_exc is None:
+                raise RuntimeError("HTTP_MAX_ATTEMPTS must be > 0")
             raise last_exc
         finally:
             if own_client:

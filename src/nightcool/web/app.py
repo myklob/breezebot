@@ -27,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..config import WEEKDAY_KEYS, AppConfig
+from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
 from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
 from ..engine import decide_actions, summarize_missed_opportunity
 from ..geocode import GeocodeError, geocode as do_geocode
@@ -187,10 +187,12 @@ def create_app(
         elif payload.leave_at == "":
             new_leave = None
         else:
-            new_leave = time.fromisoformat(payload.leave_at)
+            try:
+                new_leave = time.fromisoformat(payload.leave_at)
+            except ValueError:
+                raise HTTPException(400, f"invalid leave_at {payload.leave_at!r}; expected HH:MM")
         if new_home:
             new_leave = None
-        from ..config import DaySchedule
         setattr(cfg.schedule, day, DaySchedule(
             target_f=new_target,
             leave_at=new_leave,

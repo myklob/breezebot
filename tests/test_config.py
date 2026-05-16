@@ -107,6 +107,18 @@ notifications: {service: console}
         load_config(p)
 
 
+def test_location_without_address_or_coordinates_rejected(tmp_path):
+    bad = """
+location: {timezone: America/Denver}
+windows:
+  - {id: w1, name: a, exposure: exposed, security: secure}
+"""
+    p = tmp_path / "config.yaml"
+    p.write_text(bad)
+    with pytest.raises(Exception, match="location requires"):
+        load_config(p)
+
+
 def test_defaults_fill_in_missing_sections(tmp_path):
     minimal = """
 location: {address: "Denver CO", timezone: America/Denver}
