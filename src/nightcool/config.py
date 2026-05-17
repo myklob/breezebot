@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 WEEKDAY_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -48,10 +48,19 @@ class Location(BaseModel):
     @field_validator("longitude")
     @classmethod
     def _have_some_location(cls, v: float | None, info) -> float | None:
-        # Note: pydantic v2 validators run per-field; this only catches the case
-        # where the user supplies one half of a coordinate pair. Cross-field
-        # "must have address or coordinates" is enforced in AppConfig.
+        # Per-field validators can't see sibling fields; the cross-field
+        # check that address *or* coordinates are present is in _require_location.
         return v
+
+    @model_validator(mode="after")
+    def _require_location(self) -> "Location":
+        has_coords = self.latitude is not None and self.longitude is not None
+        has_address = bool(self.address)
+        if not has_coords and not has_address:
+            raise ValueError(
+                "location requires either 'latitude'+'longitude' or 'address'"
+            )
+        return self
 
 
 class DaySchedule(BaseModel):
