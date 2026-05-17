@@ -205,7 +205,7 @@ def _find_close_moment(
     candidates.append((morning_leave, "morning routine"))
 
     best_ts, best_reason = min(candidates, key=lambda c: c[0])
-    warning = best_reason if best_ts is floor_hit else None
+    warning = best_reason if best_ts == floor_hit else None
     return best_ts, warning
 
 
