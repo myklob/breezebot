@@ -4,6 +4,7 @@ Holds the last-notified action (for dedup), the manually-entered indoor
 temperature, and the list of web-push subscriptions. No database; the file
 lives in the working directory.
 """
+
 from __future__ import annotations
 
 import json
