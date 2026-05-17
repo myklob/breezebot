@@ -7,6 +7,8 @@ lives in the working directory.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,9 +23,20 @@ def read_state(path: Path) -> dict[str, Any]:
 
 
 def write_state(path: Path, state: dict[str, Any]) -> None:
-    """Atomically-ish overwrite the state file."""
+    """Atomically overwrite the state file (write-to-temp then rename)."""
     p = Path(path)
-    p.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+    data = json.dumps(state, indent=2, default=str)
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=".state.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def get_last_action(state: dict[str, Any]) -> str | None:
