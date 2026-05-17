@@ -16,7 +16,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from .config import AppConfig
 from .engine import Recommendation, decide_actions, should_notify
 from .geocode import GeocodeError, geocode
-from .notifier import make_notifier
+from .notifier import Notifier, make_notifier
 from .sources import make_source, read_indoor_with_fallback
 from .state import (
     get_indoor_temp_or_none,
@@ -82,7 +82,7 @@ def format_notification(rec: Recommendation) -> tuple[str, str]:
     return "NightCool", rec.reason
 
 
-def _build_notifier(cfg: AppConfig, state_path: Path):
+def _build_notifier(cfg: AppConfig, state_path: Path) -> Notifier:
     def loader() -> list[dict[str, Any]]:
         return list_subscriptions(read_state(state_path))
 
