@@ -183,7 +183,9 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Preserve the existing leave_at; `if new_home: new_leave = None`
+            # below clears it when home_all_day is explicitly set to True.
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
