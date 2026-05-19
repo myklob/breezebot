@@ -133,6 +133,8 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
+        # Reload in case the VAPID pruner wrote the file while we were sending.
+        state = read_state(state_path)
         set_last_action(state, rec.action, now)
         write_state(state_path, state)
         logger.info("Notified: %s — %s", title, body)
