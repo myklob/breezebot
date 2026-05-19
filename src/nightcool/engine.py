@@ -109,7 +109,6 @@ def _hour_passes_open_criteria(
         hour.temperature_f <= open_threshold
         and hour.temperature_f >= prefs.min_tolerable_outdoor_f
         and hour.temperature_f <= useful_max
-        and not _in_bad_sector(hour.wind_direction_deg, warnings.bad_wind_sector_deg)
     )
 
 
@@ -147,13 +146,18 @@ def predict_indoor_path(
     rate `alpha_per_hr` per hour. This is intentionally simple — a fitted
     model from `thermal.fit_model` should plug in here later via
     `alpha_per_hr`.
+
+    path[0] is the seed entry (current indoor_temp_f at forecast[0].timestamp).
+    path[1:] are the predicted values, each driven by the outdoor temp of
+    that forecast hour over a one-hour cooling step.
     """
     path: list[tuple[datetime, float]] = []
     if not forecast:
         return path
     cur_t = indoor_temp_f
     prev_ts = forecast[0].timestamp
-    for hour in forecast:
+    path.append((forecast[0].timestamp, cur_t))
+    for hour in forecast[1:]:
         dt_hr = max(0.0, (hour.timestamp - prev_ts).total_seconds() / 3600.0)
         # Closed-form integration step for dT/dt = -α(T - T_out).
         cur_t = hour.temperature_f + (cur_t - hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
@@ -188,6 +192,8 @@ def _find_close_moment(
             break
 
     # Predict indoor path under "windows open" assumption.
+    # path[0] is the seed (current indoor_temp_f); include it so the
+    # floor check fires immediately when indoor is already at the floor.
     floor_hit: datetime | None = None
     for ts, predicted in predict_indoor_path(indoor_temp_f, tail):
         if predicted <= floor.min_indoor_f:

@@ -128,9 +128,23 @@ def test_bad_wind_sector_blocks_only_facing_windows_when_wind_is_outside_sector(
     assert set(rec.eligible_windows) == {"east_facing", "west_facing"}
 
 
-def test_bad_wind_direction_blocks_opening_entirely():
+def test_bad_wind_direction_blocks_only_facing_window():
+    # Wind is in the bad sector. A window with on_bad=True should be blocked
+    # by _window_eligible; a window with on_bad=False remains eligible.
     forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(60.0, 120.0))
+    windows = [
+        make_window(id="bad_facing", on_bad=True),
+        make_window(id="safe_facing", on_bad=False),
+    ]
+    rec = _decide(71.0, forecast, windows, bad_sector=(60.0, 120.0))
+    assert rec.action == "open"
+    assert rec.eligible_windows == ["safe_facing"]
+
+
+def test_all_windows_facing_bad_sector_suppresses_open():
+    # When every window faces the bad sector, eligible list is empty → no_change.
+    forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(60.0, 120.0))
     assert rec.action != "open"
 
 
@@ -168,7 +182,7 @@ def test_close_signal_when_outdoor_warm_enough():
 
 def test_bad_sector_wraps_around_north():
     forecast = [make_hour(i, 62.0, wind_dir=5.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(350.0, 10.0))
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(350.0, 10.0))
     assert rec.action != "open"
 
 
