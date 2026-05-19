@@ -118,7 +118,10 @@ class NestSource(IndoorTempSource):
                 },
             )
             r.raise_for_status()
-            token = r.json()["access_token"]
+            data = r.json()
+            token = data.get("access_token")
+            if token is None:
+                raise SourceUnavailable("OAuth token response missing access_token")
             self._access_token = token
             return token
         finally:
