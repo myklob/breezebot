@@ -7,7 +7,7 @@ one Recommendation. No I/O, no globals; trivial to test.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Literal
 
@@ -57,12 +57,7 @@ class Recommendation:
     open_at: datetime | None
     close_at: datetime | None
     reason: str
-    warnings: list[str] = None  # type: ignore[assignment]
-
-    def __post_init__(self) -> None:
-        # Frozen dataclass: bypass setattr immutability for the default.
-        if self.warnings is None:
-            object.__setattr__(self, "warnings", [])
+    warnings: list[str] = field(default_factory=list)
 
 
 def _in_bad_sector(direction_deg: float, sector: tuple[float, float] | None) -> bool:
