@@ -133,6 +133,7 @@ class NWSProvider(WeatherProvider):
         wind_mph = parse_wind_speed_mph(period.get("windSpeed"))
         gust_str = period.get("windGust")
         gust_mph = parse_wind_speed_mph(gust_str) if gust_str else wind_mph
+        gust_mph = max(gust_mph, wind_mph)
         wind_dir = parse_wind_direction_deg(period.get("windDirection"))
 
         return HourlyForecast(
