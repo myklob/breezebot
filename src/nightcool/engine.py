@@ -109,7 +109,6 @@ def _hour_passes_open_criteria(
         hour.temperature_f <= open_threshold
         and hour.temperature_f >= prefs.min_tolerable_outdoor_f
         and hour.temperature_f <= useful_max
-        and not _in_bad_sector(hour.wind_direction_deg, warnings.bad_wind_sector_deg)
     )
 
 
@@ -152,8 +151,10 @@ def predict_indoor_path(
     if not forecast:
         return path
     cur_t = indoor_temp_f
+    # Seed the path with the starting state at forecast[0].
+    path.append((forecast[0].timestamp, cur_t))
     prev_ts = forecast[0].timestamp
-    for hour in forecast:
+    for hour in forecast[1:]:
         dt_hr = max(0.0, (hour.timestamp - prev_ts).total_seconds() / 3600.0)
         # Closed-form integration step for dT/dt = -α(T - T_out).
         cur_t = hour.temperature_f + (cur_t - hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
