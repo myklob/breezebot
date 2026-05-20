@@ -193,12 +193,17 @@ def create_app(
                 raise HTTPException(400, f"invalid leave_at {payload.leave_at!r}; expected HH:MM")
         if new_home:
             new_leave = None
+        old_day = getattr(cfg.schedule, day)
         setattr(cfg.schedule, day, DaySchedule(
             target_f=new_target,
             leave_at=new_leave,
             home_all_day=new_home,
         ))
-        _save_config()
+        try:
+            _save_config()
+        except Exception:
+            setattr(cfg.schedule, day, old_day)
+            raise
         return {"ok": True, "day": day}
 
     @app.post("/api/indoor-temp")

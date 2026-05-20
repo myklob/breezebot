@@ -184,7 +184,8 @@ def geocode(
     try:
         result = do_geocode(address)
     except GeocodeError as e:
-        raise typer.Exit(f"Geocode failed: {e}")
+        typer.echo(f"Geocode failed: {e}", err=True)
+        raise typer.Exit(code=1)
     typer.echo(f"Matched: {result.matched_address}")
     typer.echo(f"Latitude:  {result.latitude}")
     typer.echo(f"Longitude: {result.longitude}")
