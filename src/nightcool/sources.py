@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ class ManualSource(IndoorTempSource):
     that this module stays free of state.json import order issues.
     """
 
-    def __init__(self, reader: "callable[[], float | None]", default_f: float) -> None:
+    def __init__(self, reader: Callable[[], float | None], default_f: float) -> None:
         self._reader = reader
         self._default = default_f
 
@@ -189,7 +190,7 @@ class BLESource(IndoorTempSource):
 
 def make_source(
     cfg: IndoorTempConfig,
-    manual_reader: "callable[[], float | None]",
+    manual_reader: Callable[[], float | None],
 ) -> IndoorTempSource:
     """Build the configured indoor-temp source."""
     if cfg.source == IndoorSourceKind.SENSOR_FILE:
