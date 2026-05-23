@@ -16,6 +16,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -92,11 +94,22 @@ def create_app(
         return datetime.now(ZoneInfo(cfg.location.timezone))
 
     def _save_config() -> None:
-        """Persist the current cfg back to config.yaml. Requires config_path."""
+        """Atomically persist the current cfg back to config.yaml. Requires config_path."""
         if config_path is None:
             raise HTTPException(409, "Server started without a config path; cannot persist.")
         data = cfg.model_dump(mode="json", exclude_none=True)
-        config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        text = yaml.safe_dump(data, sort_keys=False)
+        fd, tmp = tempfile.mkstemp(dir=config_path.parent, prefix=".config.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, config_path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     @app.get("/api/state")
     def get_state() -> dict[str, Any]:
