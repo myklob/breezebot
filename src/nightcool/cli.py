@@ -61,7 +61,7 @@ def check(
     today = cfg.schedule.for_weekday(now.weekday())
     typer.echo(f"Indoor: {indoor:.1f}°F (source: {source_name})")
     typer.echo(f"Today's target: {today.target_f:.0f}°F"
-               f"{', home all day' if today.home_all_day else ''}"
+               f"{'\u2c, home all day' if today.home_all_day else ''}"
                f"{f', leave at {today.leave_at}' if today.leave_at else ''}")
     typer.echo(f"Action: {rec.action}")
     typer.echo(f"Title:  {title}")
@@ -234,7 +234,12 @@ def set_leave_time(
             entry["home_all_day"] = True
             entry.pop("leave_at", None)
         else:
-            time.fromisoformat(leave_at)  # Validate format.
+            try:
+                time.fromisoformat(leave_at)
+            except ValueError:
+                raise typer.BadParameter(
+                    f"invalid time {leave_at!r}; expected HH:MM (e.g. 08:30)"
+                )
             entry["leave_at"] = leave_at
             entry["home_all_day"] = False
     config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
@@ -250,11 +255,11 @@ def web_push_keys() -> None:
     typer.echo("notifications:")
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
-    typer.echo(f"    vapid_public_key: \"{public}\"")
+    typer.echo(f'    vapid_public_key: "{public}"')
     typer.echo(f"    vapid_private_key: |")
     for line in private.splitlines():
         typer.echo(f"      {line}")
-    typer.echo("    vapid_subject: \"mailto:you@example.com\"")
+    typer.echo('    vapid_subject: "mailto:you@example.com"')
 
 
 if __name__ == "__main__":
