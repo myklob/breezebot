@@ -147,18 +147,21 @@ def predict_indoor_path(
     rate `alpha_per_hr` per hour. This is intentionally simple — a fitted
     model from `thermal.fit_model` should plug in here later via
     `alpha_per_hr`.
+
+    Each entry in the returned path is the indoor temperature AT that
+    timestamp, before that hour's outdoor forcing is applied. The outdoor
+    temperature at forecast[i] drives the transition to forecast[i+1].
     """
     path: list[tuple[datetime, float]] = []
     if not forecast:
         return path
     cur_t = indoor_temp_f
-    prev_ts = forecast[0].timestamp
-    for hour in forecast:
-        dt_hr = max(0.0, (hour.timestamp - prev_ts).total_seconds() / 3600.0)
-        # Closed-form integration step for dT/dt = -α(T - T_out).
-        cur_t = hour.temperature_f + (cur_t - hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
+    for i, hour in enumerate(forecast):
         path.append((hour.timestamp, cur_t))
-        prev_ts = hour.timestamp
+        if i + 1 < len(forecast):
+            dt_hr = max(0.0, (forecast[i + 1].timestamp - hour.timestamp).total_seconds() / 3600.0)
+            # Closed-form integration step for dT/dt = -α(T - T_out).
+            cur_t = hour.temperature_f + (cur_t - hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
     return path
 
 
@@ -178,7 +181,7 @@ def _find_close_moment(
     Returns (timestamp, optional warning string).
     """
     threshold = indoor_temp_f - prefs.hysteresis_f
-    open_idx = forecast.index(open_moment)
+    open_idx = next((i for i, h in enumerate(forecast) if h is open_moment), 0)
     tail = forecast[open_idx:]
 
     warmup_at: datetime | None = None
