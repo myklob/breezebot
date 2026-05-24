@@ -88,7 +88,7 @@ def _window_eligible(window: Window, hour: HourlyForecast, warnings: WarningPref
     if warnings.warn_on_rain:
         if window.exposure == Exposure.EXPOSED and hour.rain_chance_pct > warnings.max_rain_chance_pct:
             return False
-        if window.exposure == Exposure.COVERED and hour.rain_chance_pct > 60.0:
+        if window.exposure == Exposure.COVERED and hour.rain_chance_pct > warnings.max_rain_chance_pct:
             return False
     if warnings.warn_on_gusts and window.security == Security.UNSECURE:
         if hour.wind_gust_mph > warnings.max_gust_mph:
@@ -205,7 +205,7 @@ def _find_close_moment(
     candidates.append((morning_leave, "morning routine"))
 
     best_ts, best_reason = min(candidates, key=lambda c: c[0])
-    warning = best_reason if best_ts is floor_hit else None
+    warning = best_reason if best_ts == floor_hit else None
     return best_ts, warning
 
 
