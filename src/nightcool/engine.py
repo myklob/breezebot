@@ -152,13 +152,15 @@ def predict_indoor_path(
     if not forecast:
         return path
     cur_t = indoor_temp_f
-    prev_ts = forecast[0].timestamp
-    for hour in forecast:
-        dt_hr = max(0.0, (hour.timestamp - prev_ts).total_seconds() / 3600.0)
+    path.append((forecast[0].timestamp, cur_t))
+    for i in range(1, len(forecast)):
+        prev_hour = forecast[i - 1]
+        hour = forecast[i]
+        dt_hr = max(0.0, (hour.timestamp - prev_hour.timestamp).total_seconds() / 3600.0)
         # Closed-form integration step for dT/dt = -α(T - T_out).
-        cur_t = hour.temperature_f + (cur_t - hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
+        # Use prev_hour's outdoor temp as the equilibrium target for this step.
+        cur_t = prev_hour.temperature_f + (cur_t - prev_hour.temperature_f) * math.exp(-alpha_per_hr * dt_hr)
         path.append((hour.timestamp, cur_t))
-        prev_ts = hour.timestamp
     return path
 
 
@@ -205,7 +207,7 @@ def _find_close_moment(
     candidates.append((morning_leave, "morning routine"))
 
     best_ts, best_reason = min(candidates, key=lambda c: c[0])
-    warning = best_reason if best_ts is floor_hit else None
+    warning = best_reason if best_ts == floor_hit else None
     return best_ts, warning
 
 
@@ -269,7 +271,7 @@ def decide_actions(
     if open_moment is not None:
         eligible = [w for w in windows if _window_eligible(w, open_moment, warnings)]
         starts_in = open_moment.timestamp - now
-        if eligible and starts_in <= timedelta(hours=OPEN_LOOKAHEAD_HOURS):
+        if eligible and timedelta(0) <= starts_in <= timedelta(hours=OPEN_LOOKAHEAD_HOURS):
             close_at, floor_warning = _find_close_moment(
                 hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule,
             )
@@ -341,14 +343,15 @@ def should_notify(
         if last_action != "open":
             return False
         today = _today_schedule(now, schedule)
-        # If the user has a typical leave time today and it's still ahead of
-        # us, they'll close on the way out — no need to ping.
+        # Only skip the close ping if the computed close time is at or after
+        # the user's leave time — they'll close on the way out. An urgent
+        # early-morning close (close_at well before leave_at) still fires.
         if today.leave_at is not None and not today.home_all_day:
             leave_dt = now.replace(
                 hour=today.leave_at.hour, minute=today.leave_at.minute,
                 second=0, microsecond=0,
             )
-            if now < leave_dt:
+            if rec.close_at is not None and rec.close_at >= leave_dt:
                 return False
         return True
     return False

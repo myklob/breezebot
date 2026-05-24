@@ -203,7 +203,7 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
             continue
         dT = (cur.indoor_f - prev.indoor_f) / dt_hours
         windows_open = 1.0 if (cur.windows_open or prev.windows_open) else 0.0
-        vent = windows_open * (cur.outdoor_f - prev.indoor_f)
+        vent = windows_open * (prev.outdoor_f - prev.indoor_f)
         solar = 50.0 - cur.outdoor_f  # rough solar load stand-in.
         hvac = 1.0 if (cur.hvac_active or prev.hvac_active) else 0.0
         rows.append((dT, vent, solar, hvac))
