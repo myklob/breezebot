@@ -89,7 +89,9 @@ class NWSProvider(WeatherProvider):
     def _get(self, url: str) -> dict[str, Any]:
         headers = {"User-Agent": self.user_agent, "Accept": "application/geo+json"}
         last_exc: Exception | None = None
-        client = self._client or httpx.Client(timeout=HTTP_TIMEOUT_S, headers=headers)
+        # Don't set headers on the client constructor — pass them per-request so
+        # injected test clients and the temporary production client behave the same.
+        client = self._client or httpx.Client(timeout=HTTP_TIMEOUT_S)
         own_client = self._client is None
         try:
             for _ in range(HTTP_MAX_ATTEMPTS):

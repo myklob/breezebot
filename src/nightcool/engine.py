@@ -178,7 +178,9 @@ def _find_close_moment(
     Returns (timestamp, optional warning string).
     """
     threshold = indoor_temp_f - prefs.hysteresis_f
-    open_idx = forecast.index(open_moment)
+    # Use identity comparison so duplicate-valued entries in the same forecast
+    # list don't cause the wrong tail to be selected.
+    open_idx = next(i for i, h in enumerate(forecast) if h is open_moment)
     tail = forecast[open_idx:]
 
     warmup_at: datetime | None = None

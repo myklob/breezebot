@@ -84,7 +84,10 @@ def create_app(
         if provider is not None:
             return provider
         state = read_state(state_path)
-        lat, lon = resolve_coordinates(cfg, state)
+        try:
+            lat, lon = resolve_coordinates(cfg, state)
+        except GeocodeError as e:
+            raise HTTPException(503, f"Could not resolve location: {e}")
         write_state(state_path, state)
         return NWSProvider(lat, lon)
 
@@ -183,7 +186,9 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Preserve the existing leave_at unless home_all_day is explicitly being
+            # set to True, in which case there is no departure time to keep.
+            new_leave = None if payload.home_all_day is True else current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
