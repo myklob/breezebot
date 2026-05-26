@@ -125,6 +125,33 @@ windows: [{id: w, name: W, exposure: exposed, security: secure}]
     assert raw["schedule"]["mon"]["leave_at"].startswith("08:00")
 
 
+def test_post_schedule_day_false_home_all_day_preserves_leave_at(tmp_path):
+    """Sending home_all_day=false without leave_at must not erase the stored leave_at."""
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+schedule:
+  mon: {target_f: 70.0, leave_at: "08:00:00"}
+""".strip()
+    )
+    from nightcool.config import load_config
+    import yaml
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        r = c.post("/api/schedule/mon", json={"home_all_day": False})
+        assert r.status_code == 200
+    raw = yaml.safe_load(config_path.read_text())
+    assert raw["schedule"]["mon"]["leave_at"] is not None, (
+        "leave_at was erroneously cleared when home_all_day=false was sent without leave_at"
+    )
+
+
 def test_post_geocode_resolves_and_persists(client):
     c, state, cfg, _ = client
     fake = GeocodeResult(latitude=39.74, longitude=-104.99, matched_address="Denver, CO")
