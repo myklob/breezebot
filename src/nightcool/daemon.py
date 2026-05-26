@@ -122,7 +122,11 @@ def run_once(
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
         # Persist any newly-cached coordinates.
         write_state(state_path, state)
-    forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
+    try:
+        forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
+    except Exception as e:
+        logger.error("Weather fetch failed: %s", e)
+        return Recommendation("no_change", [], None, None, f"Weather fetch failed: {e}")
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
         schedule=cfg.schedule, prefs=cfg.prefs,

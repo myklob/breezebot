@@ -102,7 +102,10 @@ def create_app(
     def get_state() -> dict[str, Any]:
         state = read_state(state_path)
         indoor, source_name = read_indoor_temp(cfg, state)
-        forecast = get_provider().hourly_forecast(hours=12)
+        try:
+            forecast = get_provider().hourly_forecast(hours=12)
+        except Exception as e:
+            raise HTTPException(503, f"Weather fetch failed: {e}")
         now = now_local()
         rec = decide_actions(
             indoor, forecast, cfg.windows, now,
@@ -148,7 +151,10 @@ def create_app(
 
     @app.get("/api/forecast")
     def get_forecast() -> dict[str, Any]:
-        hours = get_provider().hourly_forecast(hours=12)
+        try:
+            hours = get_provider().hourly_forecast(hours=12)
+        except Exception as e:
+            raise HTTPException(503, f"Weather fetch failed: {e}")
         return {
             "hours": [
                 {
