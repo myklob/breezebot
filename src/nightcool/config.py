@@ -154,6 +154,13 @@ class WarningPrefs(BaseModel):
     allergen source. Wraps around: [350, 10] covers the 20° arc around
     true north."""
 
+    max_dew_point_f: float | None = None
+    """Block opening windows when the outdoor dew point exceeds this value.
+    A 70 °F night at 70 °F dew point feels miserable indoors even though the
+    raw temperature would normally qualify as a cooling opportunity. 60 °F
+    is "comfortable"; 65 °F is "noticeable"; above 70 °F is "oppressive".
+    Leave as None to disable the gate."""
+
     @field_validator("bad_wind_sector_deg")
     @classmethod
     def _check_sector(cls, v: tuple[float, float] | None) -> tuple[float, float] | None:

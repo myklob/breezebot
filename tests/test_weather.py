@@ -52,3 +52,35 @@ def test_nws_period_parser_handles_fixture():
     assert hours[3].wind_direction_deg == 180.0
     # null probabilityOfPrecipitation → 0.
     assert hours[4].rain_chance_pct == 0.0
+    # Fixture predates the dewpoint field; parser should report None rather
+    # than fabricating a value.
+    assert all(h.dew_point_f is None for h in hours)
+
+
+def test_nws_period_parser_dewpoint_celsius_to_fahrenheit():
+    period = {
+        "startTime": "2024-06-15T22:00:00-06:00",
+        "temperature": 68,
+        "temperatureUnit": "F",
+        "probabilityOfPrecipitation": {"value": 5},
+        "windSpeed": "8 mph",
+        "windDirection": "NW",
+        "dewpoint": {"unitCode": "wmoUnit:degC", "value": 15.0},
+    }
+    hour = NWSProvider._parse_period(period)
+    # 15 °C → 59 °F.
+    assert hour.dew_point_f == 59.0
+
+
+def test_nws_period_parser_dewpoint_missing_value_is_none():
+    period = {
+        "startTime": "2024-06-15T22:00:00-06:00",
+        "temperature": 68,
+        "temperatureUnit": "F",
+        "probabilityOfPrecipitation": {"value": 5},
+        "windSpeed": "8 mph",
+        "windDirection": "NW",
+        "dewpoint": {"unitCode": "wmoUnit:degC", "value": None},
+    }
+    hour = NWSProvider._parse_period(period)
+    assert hour.dew_point_f is None

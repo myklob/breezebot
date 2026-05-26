@@ -128,7 +128,13 @@ warnings:
   warn_on_gusts: false           # Skip 'unsecure' windows during gusty wind.
   max_gust_mph: 18.0
   bad_wind_sector_deg: null      # Set [lo, hi] to block wind from a direction.
+  max_dew_point_f: null          # Refuse open when outdoor dew point is too high.
 ```
+
+`max_dew_point_f` is the muggy-air gate: a 65 °F night sounds great until
+the dew point is 70 °F and the air walking in is saturated. Common
+thresholds are 60 °F ("comfortable"), 65 °F ("noticeable"), and 70 °F
+("oppressive"). Leave `null` to disable.
 
 Use `bad_wind_sector_deg` for whatever bothers your house — neighbor's
 smoking, a busy road, a landfill, an allergen source. Mark individual
@@ -186,7 +192,6 @@ The web UI is the same in every case — only the host process differs.
 - Air quality (AQI / wildfire smoke)
 - Motorized window control
 - Per-window cross-ventilation scoring
-- Dew point / condensation calculation
 - Coverage outside the US (NWS only)
 - Window-confirmation telemetry ("did you actually open them?")
 

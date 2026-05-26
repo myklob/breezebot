@@ -46,6 +46,11 @@ class HourlyForecast:
     wind_gust_mph: float
     wind_direction_deg: float
     rain_chance_pct: float
+    # Optional: not every provider/period exposes dew point. None means
+    # "unknown" and the dew-point gate (if enabled) treats it as a pass-through
+    # rather than blocking — better to err toward usefulness than silently
+    # refuse to open windows because of missing data.
+    dew_point_f: float | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,12 @@ def _hour_passes_open_criteria(
 ) -> bool:
     open_threshold = indoor_temp_f - prefs.hysteresis_f
     useful_max = target_f + USEFUL_DELTA_OVER_TARGET_F
+    if (
+        warnings.max_dew_point_f is not None
+        and hour.dew_point_f is not None
+        and hour.dew_point_f > warnings.max_dew_point_f
+    ):
+        return False
     return (
         hour.temperature_f <= open_threshold
         and hour.temperature_f >= prefs.min_tolerable_outdoor_f

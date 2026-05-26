@@ -27,7 +27,8 @@ from nightcool.engine import (
 BASE = datetime(2024, 6, 15, 20, 0, tzinfo=timezone.utc)
 
 
-def make_hour(hours_ahead, temp_f, *, wind_dir=270.0, gusts=5.0, rain=0.0, base=BASE):
+def make_hour(hours_ahead, temp_f, *, wind_dir=270.0, gusts=5.0, rain=0.0,
+              dew_point_f=None, base=BASE):
     return HourlyForecast(
         timestamp=base + timedelta(hours=hours_ahead),
         temperature_f=temp_f,
@@ -35,6 +36,7 @@ def make_hour(hours_ahead, temp_f, *, wind_dir=270.0, gusts=5.0, rain=0.0, base=
         wind_gust_mph=gusts,
         wind_direction_deg=wind_dir,
         rain_chance_pct=rain,
+        dew_point_f=dew_point_f,
     )
 
 
@@ -55,7 +57,8 @@ def _every_day(target_f=65.0):
 
 
 def _decide(indoor, forecast, windows, *, target_f=65.0, hysteresis=2.5,
-            bad_sector=None, warn_rain=False, warn_gusts=False, floor=10.0, now=BASE):
+            bad_sector=None, warn_rain=False, warn_gusts=False, floor=10.0,
+            max_dew_point_f=None, now=BASE):
     return decide_actions(
         indoor, forecast, windows, now,
         schedule=_every_day(target_f),
@@ -65,6 +68,7 @@ def _decide(indoor, forecast, windows, *, target_f=65.0, hysteresis=2.5,
             bad_wind_sector_deg=bad_sector,
             warn_on_rain=warn_rain,
             warn_on_gusts=warn_gusts,
+            max_dew_point_f=max_dew_point_f,
         ),
     )
 
@@ -222,3 +226,34 @@ def test_open_suppressed_if_floor_overshot_immediately():
     forecast = [make_hour(i, 55.0) for i in range(12)]
     rec = _decide(72.0, forecast, [make_window()], floor=72.0)
     assert rec.action == "no_change"
+
+
+# ---- Dew point gate ----
+
+def test_dew_point_gate_blocks_muggy_open():
+    # Cool 65 °F night, but a 70 °F dew point — air is saturated, not worth
+    # letting in. With the gate set at 60 °F, every hour fails the check.
+    forecast = [make_hour(i, 65.0, dew_point_f=70.0) for i in range(12)]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action != "open"
+
+
+def test_dew_point_gate_allows_open_when_air_is_dry():
+    # Same temps, dry 50 °F dew point — gate set at 60 °F, should still open.
+    forecast = [make_hour(i, 65.0, dew_point_f=50.0) for i in range(12)]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action == "open"
+
+
+def test_dew_point_gate_disabled_by_default_ignores_dew_point():
+    # Even a muggy 70 °F dew point shouldn't block when the gate is unset.
+    forecast = [make_hour(i, 65.0, dew_point_f=70.0) for i in range(12)]
+    rec = _decide(75.0, forecast, [make_window()])
+    assert rec.action == "open"
+
+
+def test_dew_point_gate_passes_through_unknown_dew_point():
+    # Provider returned no dew point — don't block on absent data.
+    forecast = [make_hour(i, 65.0, dew_point_f=None) for i in range(12)]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action == "open"

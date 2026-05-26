@@ -135,6 +135,8 @@ class NWSProvider(WeatherProvider):
         gust_mph = parse_wind_speed_mph(gust_str) if gust_str else wind_mph
         wind_dir = parse_wind_direction_deg(period.get("windDirection"))
 
+        dew_point_f = _parse_dewpoint_f(period.get("dewpoint"))
+
         return HourlyForecast(
             timestamp=ts,
             temperature_f=temp,
@@ -142,4 +144,24 @@ class NWSProvider(WeatherProvider):
             wind_gust_mph=gust_mph,
             wind_direction_deg=wind_dir,
             rain_chance_pct=rain_pct,
+            dew_point_f=dew_point_f,
         )
+
+
+def _parse_dewpoint_f(dewpoint: dict[str, Any] | None) -> float | None:
+    """Extract NWS dew point and normalize to °F. NWS reports dewpoint as
+    `{"unitCode": "wmoUnit:degC", "value": 12.2}` — degrees Celsius by
+    convention even when the rest of the forecast is in Fahrenheit. Older
+    fixtures omit the field; treat that as unknown rather than 0.
+    """
+    if not dewpoint:
+        return None
+    value = dewpoint.get("value")
+    if value is None:
+        return None
+    unit_code = (dewpoint.get("unitCode") or "").lower()
+    val_f = float(value)
+    if "degc" in unit_code or unit_code == "":
+        # NWS default unit is Celsius; assume C when unit is missing.
+        val_f = val_f * 9.0 / 5.0 + 32.0
+    return val_f
