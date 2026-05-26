@@ -41,6 +41,7 @@ warnings:
   warn_on_gusts: false        # Useful if loose papers, curtains, or allergies.
   max_gust_mph: 18.0
   bad_wind_sector_deg: null   # [lo, hi] degrees — e.g., [60, 120] to block easterly wind.
+  max_dew_point_f: null       # Block opening on muggy nights. Try 60 (comfortable) to 65 (noticeable).
 
 indoor_temp:
   source: "manual"            # manual | sensor_file | nest | ble
