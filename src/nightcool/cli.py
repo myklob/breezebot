@@ -51,7 +51,10 @@ def check(
     lat, lon = resolve_coordinates(cfg, st)
     write_state(state, st)
     provider = NWSProvider(lat, lon)
-    forecast = provider.hourly_forecast(hours=12)
+    try:
+        forecast = provider.hourly_forecast(hours=12)
+    except Exception as e:
+        raise typer.Exit(f"Weather fetch failed: {e}")
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
         schedule=cfg.schedule, prefs=cfg.prefs,
@@ -61,7 +64,7 @@ def check(
     today = cfg.schedule.for_weekday(now.weekday())
     typer.echo(f"Indoor: {indoor:.1f}°F (source: {source_name})")
     typer.echo(f"Today's target: {today.target_f:.0f}°F"
-               f"{', home all day' if today.home_all_day else ''}"
+               f"{',' home all day' if today.home_all_day else ''}"
                f"{f', leave at {today.leave_at}' if today.leave_at else ''}")
     typer.echo(f"Action: {rec.action}")
     typer.echo(f"Title:  {title}")
@@ -87,7 +90,10 @@ def forecast(
     lat, lon = resolve_coordinates(cfg, st)
     write_state(state, st)
     provider = NWSProvider(lat, lon)
-    hours = provider.hourly_forecast(hours=12)
+    try:
+        hours = provider.hourly_forecast(hours=12)
+    except Exception as e:
+        raise typer.Exit(f"Weather fetch failed: {e}")
     typer.echo(f"{'Time':<25} {'Temp°F':>7} {'Wind':>6} {'Gust':>6} {'Dir°':>5} {'Rain%':>6}")
     for h in hours:
         typer.echo(
