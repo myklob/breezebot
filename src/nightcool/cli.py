@@ -63,9 +63,11 @@ def check(
     title, body = format_notification(rec)
     today = cfg.schedule.for_weekday(now.weekday())
     typer.echo(f"Indoor: {indoor:.1f}°F (source: {source_name})")
-    typer.echo(f"Today's target: {today.target_f:.0f}°F"
-               f"{',' home all day' if today.home_all_day else ''}"
-               f"{f', leave at {today.leave_at}' if today.leave_at else ''}")
+    typer.echo(
+        f"Today's target: {today.target_f:.0f}°F"
+        f"{', home all day' if today.home_all_day else ''}"
+        f"{f', leave at {today.leave_at}' if today.leave_at else ''}"
+    )
     typer.echo(f"Action: {rec.action}")
     typer.echo(f"Title:  {title}")
     typer.echo(f"Reason: {body}")
