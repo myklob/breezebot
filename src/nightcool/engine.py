@@ -171,13 +171,16 @@ def _find_close_moment(
     schedule: DailySchedule,
 ) -> tuple[datetime, str | None]:
     """Earliest of:
-      * outdoor crossing back above (indoor - hysteresis)
+      * outdoor crossing above (target_f + hysteresis) — air no longer cooling
       * the predicted indoor temp hitting the comfort floor
       * tomorrow's `leave_at` (or, fallback, quiet_hours_end)
 
     Returns (timestamp, optional warning string).
     """
-    threshold = indoor_temp_f - prefs.hysteresis_f
+    # Close when outdoor rises above the day's target + hysteresis — at that point
+    # the outside air is no longer helping cool toward the goal temperature.
+    today_sched = _today_schedule(open_moment.timestamp, schedule)
+    threshold = today_sched.target_f + prefs.hysteresis_f
     open_idx = forecast.index(open_moment)
     tail = forecast[open_idx:]
 
