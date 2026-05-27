@@ -161,6 +161,12 @@ class WarningPrefs(BaseModel):
     is "comfortable"; 65 °F is "noticeable"; above 70 °F is "oppressive".
     Leave as None to disable the gate."""
 
+    max_aqi: int | None = None
+    """Block opening windows when the current AQI exceeds this value.
+    Requires AppConfig.aqi to have a provider and API key configured.
+    Typical thresholds: 50 (Good/Moderate boundary), 100 (Moderate/USG
+    boundary). Leave as None to disable the gate."""
+
     @field_validator("bad_wind_sector_deg")
     @classmethod
     def _check_sector(cls, v: tuple[float, float] | None) -> tuple[float, float] | None:
@@ -170,6 +176,26 @@ class WarningPrefs(BaseModel):
         if not (0 <= lo < 360 and 0 <= hi < 360):
             raise ValueError("bad_wind_sector_deg values must be in [0, 360)")
         return v
+
+
+class AQIConfig(BaseModel):
+    """External air quality API configuration.
+
+    Set `provider` and the matching API key, then set `warnings.max_aqi`
+    to enable the gate. Without a key the gate is effectively disabled
+    regardless of `warnings.max_aqi`.
+    """
+
+    provider: Literal["airnow", "purpleair"] = "airnow"
+    """Which AQI backend to use.
+    - 'airnow': EPA official feed. Free key at https://www.airnowapi.org.
+    - 'purpleair': Community sensors. Free key at https://develop.purpleair.com."""
+
+    airnow_api_key: str | None = None
+    """Required when provider='airnow'."""
+
+    purpleair_api_key: str | None = None
+    """Required when provider='purpleair'."""
 
 
 class IndoorSourceKind(str, Enum):
@@ -274,6 +300,7 @@ class AppConfig(BaseModel):
     comfort_floor: ComfortFloor = Field(default_factory=ComfortFloor)
     prefs: Prefs = Field(default_factory=Prefs)
     warnings: WarningPrefs = Field(default_factory=WarningPrefs)
+    aqi: AQIConfig = Field(default_factory=AQIConfig)
     indoor_temp: IndoorTempConfig = Field(default_factory=IndoorTempConfig)
     windows: list[Window]
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)

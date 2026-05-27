@@ -260,6 +260,7 @@ def decide_actions(
     prefs: Prefs | None = None,
     comfort_floor: ComfortFloor | None = None,
     warnings: WarningPrefs | None = None,
+    current_aqi: int | None = None,
 ) -> Recommendation:
     """Decide whether to open, close, or do nothing. Pure function."""
     schedule = schedule or DailySchedule()
@@ -269,6 +270,19 @@ def decide_actions(
 
     if not hourly_forecast:
         return Recommendation("no_change", [], None, None, "No forecast available.")
+
+    # AQI gate: if the air outside is unhealthy, don't open regardless of temp.
+    # Pass-through when current_aqi is None (provider not configured or fetch
+    # failed) — same convention as the dew-point gate on missing data.
+    if (
+        warnings.max_aqi is not None
+        and current_aqi is not None
+        and current_aqi > warnings.max_aqi
+    ):
+        return Recommendation(
+            "no_change", [], None, None,
+            f"AQI {current_aqi} exceeds limit {warnings.max_aqi}. Keeping windows closed.",
+        )
 
     today = _today_schedule(now, schedule)
     open_threshold = indoor_temp_f - prefs.hysteresis_f

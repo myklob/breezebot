@@ -42,6 +42,14 @@ warnings:
   max_gust_mph: 18.0
   bad_wind_sector_deg: null   # [lo, hi] degrees — e.g., [60, 120] to block easterly wind.
   max_dew_point_f: null       # Block opening on muggy nights. Try 60 (comfortable) to 65 (noticeable).
+  max_aqi: null               # Block opening when AQI is unhealthy. Try 100 (Moderate/USG boundary).
+
+# Air quality gate. Requires a free API key from one of the providers below.
+# Set warnings.max_aqi above to activate the gate once a key is configured.
+# aqi:
+#   provider: "airnow"              # airnow | purpleair
+#   airnow_api_key: null            # Free key at https://www.airnowapi.org
+#   # purpleair_api_key: null       # Free key at https://develop.purpleair.com
 
 indoor_temp:
   source: "manual"            # manual | sensor_file | nest | ble

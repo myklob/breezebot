@@ -129,6 +129,7 @@ warnings:
   max_gust_mph: 18.0
   bad_wind_sector_deg: null      # Set [lo, hi] to block wind from a direction.
   max_dew_point_f: null          # Refuse open when outdoor dew point is too high.
+  max_aqi: null                  # Refuse open when AQI is unhealthy.
 ```
 
 `max_dew_point_f` is the muggy-air gate: a 65 °F night sounds great until
@@ -136,9 +137,48 @@ the dew point is 70 °F and the air walking in is saturated. Common
 thresholds are 60 °F ("comfortable"), 65 °F ("noticeable"), and 70 °F
 ("oppressive"). Leave `null` to disable.
 
+`max_aqi` is the air quality gate: keeps windows closed when outdoor air
+is smoky, smoggy, or otherwise unhealthy. Set to 100 to allow opening only
+when the air is Good or Moderate (AQI 0–100), or 50 to require Good air
+only. Requires an AQI API key — see the AQI section below.
+
 Use `bad_wind_sector_deg` for whatever bothers your house — neighbor's
 smoking, a busy road, a landfill, an allergen source. Mark individual
 windows with `on_bad_wind_sector: true` so only those windows get skipped.
+
+## Air quality (AQI) gate
+
+NightCool can refuse to open windows when outdoor air is unhealthy due to
+wildfire smoke, smog, or high ozone. To enable:
+
+1. Get a free API key from one of the providers below.
+2. Add an `aqi` block to `config.yaml`:
+
+```yaml
+aqi:
+  provider: "airnow"          # airnow | purpleair
+  airnow_api_key: "YOUR_KEY"  # from https://www.airnowapi.org
+  # purpleair_api_key: "KEY"  # alternative: https://develop.purpleair.com
+```
+
+3. Set a threshold in `warnings`:
+
+```yaml
+warnings:
+  max_aqi: 100  # block when AQI > 100 (Unhealthy for Sensitive Groups)
+```
+
+**AirNow** is the EPA's official feed — data is updated hourly, covers the
+US and parts of Canada/Mexico. Free, no billing required.
+
+**PurpleAir** uses crowd-sourced sensors — faster updates (roughly every
+2 minutes), denser coverage in some areas, but noisier data. Free API key
+available at develop.purpleair.com.
+
+NightCool caches AQI readings for 30 minutes so a 15-minute polling cycle
+doesn't hammer the API. If the AQI fetch fails (network error, rate limit),
+the gate passes through rather than refusing to open — better to let in
+some cool air than to silently block forever on a transient error.
 
 ## Indoor temperature: where it comes from
 
@@ -189,7 +229,6 @@ The web UI is the same in every case — only the host process differs.
 
 ## What this app does NOT do (yet)
 
-- Air quality (AQI / wildfire smoke)
 - Motorized window control
 - Per-window cross-ventilation scoring
 - Coverage outside the US (NWS only)

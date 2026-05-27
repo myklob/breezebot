@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from .aqi import AQIProvider, make_aqi_provider
 from .config import AppConfig
 from .engine import Recommendation, decide_actions, should_notify
 from .geocode import GeocodeError, geocode
@@ -108,6 +109,7 @@ def run_once(
     cfg: AppConfig,
     state_path: Path,
     provider: WeatherProvider | None = None,
+    aqi_provider: AQIProvider | None = None,
 ) -> Recommendation:
     """Run one poll cycle. Returns the engine recommendation for inspection."""
     tz = ZoneInfo(cfg.location.timezone)
@@ -123,10 +125,20 @@ def run_once(
         # Persist any newly-cached coordinates.
         write_state(state_path, state)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
+
+    current_aqi: int | None = None
+    if aqi_provider is not None:
+        try:
+            lat, lon = resolve_coordinates(cfg, state)
+            current_aqi = aqi_provider.current_aqi(lat, lon)
+        except Exception as e:
+            logger.warning("AQI fetch failed: %s", e)
+
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
         schedule=cfg.schedule, prefs=cfg.prefs,
         comfort_floor=cfg.comfort_floor, warnings=cfg.warnings,
+        current_aqi=current_aqi,
     )
     last = get_last_action(state)
     if should_notify(rec, last, now, schedule=cfg.schedule, prefs=cfg.prefs):
@@ -181,12 +193,15 @@ def _log_observation(
 def run_daemon(cfg: AppConfig, state_path: Path) -> None:
     """Block forever, running run_once every POLL_MINUTES."""
     tz = ZoneInfo(cfg.location.timezone)
+    aqi_provider = make_aqi_provider(cfg)
+    if aqi_provider is not None:
+        logger.info("AQI gate enabled: provider=%s max_aqi=%s", cfg.aqi.provider, cfg.warnings.max_aqi)
     scheduler = BlockingScheduler(timezone=cfg.location.timezone)
     scheduler.add_job(
         run_once,
         "interval",
         minutes=POLL_MINUTES,
-        args=[cfg, state_path],
+        args=[cfg, state_path, None, aqi_provider],
         next_run_time=datetime.now(tz),
         max_instances=1,
         coalesce=True,
