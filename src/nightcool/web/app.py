@@ -136,6 +136,7 @@ def create_app(
                     "temp_f": h.temperature_f,
                     "wind_mph": h.wind_speed_mph,
                     "rain_pct": h.rain_chance_pct,
+                    "dew_point_f": h.dew_point_f,
                 }
                 for h in forecast[:6]
             ],
@@ -158,6 +159,7 @@ def create_app(
                     "gust_mph": h.wind_gust_mph,
                     "wind_dir_deg": h.wind_direction_deg,
                     "rain_pct": h.rain_chance_pct,
+                    "dew_point_f": h.dew_point_f,
                 }
                 for h in hours
             ]
