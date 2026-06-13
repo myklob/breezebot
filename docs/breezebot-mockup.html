@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>BreezeBot — Onboarding Mockup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -202,8 +202,8 @@
     opacity: 0.4;
     animation: drift 4s infinite ease-in-out;
   }
-  .breeze-line:nth-child(8) { bottom: 50px; animation-delay: 1s; opacity: 0.25; }
-  .breeze-line:nth-child(9) { bottom: 70px; animation-delay: 2s; opacity: 0.15; }
+  .breeze-line.breeze-line-2 { bottom: 50px; animation-delay: 1s; opacity: 0.25; }
+  .breeze-line.breeze-line-3 { bottom: 70px; animation-delay: 2s; opacity: 0.15; }
   @keyframes drift {
     0%, 100% { transform: translateX(-20px); }
     50% { transform: translateX(20px); }
@@ -521,8 +521,8 @@
         <div class="star"></div><div class="star"></div><div class="star"></div>
         <div class="moon"></div>
         <div class="breeze-line"></div>
-        <div class="breeze-line"></div>
-        <div class="breeze-line"></div>
+        <div class="breeze-line breeze-line-2"></div>
+        <div class="breeze-line breeze-line-3"></div>
       </div>
       <div class="brand">Breeze<em>Bot</em></div>
       <div class="tagline">The cool air is free.<br>Let's go get it.</div>
@@ -873,11 +873,13 @@
 
   function renderProgress() {
     progress.innerHTML = '';
-    for (let i = 0; i < total - 1; i++) {
+    // One dot per numbered onboarding step (screens 1..total-2). The welcome
+    // screen (0) and the dashboard (total-1) are not steps, so they get no dot.
+    for (let screen = 1; screen <= total - 2; screen++) {
       const dot = document.createElement('div');
       dot.className = 'progress-dot';
-      if (i < current) dot.classList.add('done');
-      if (i === current && current > 0) dot.classList.add('active');
+      if (current > screen) dot.classList.add('done');
+      if (current === screen) dot.classList.add('active');
       progress.appendChild(dot);
     }
     backBtn.classList.toggle('hidden', current === 0);
@@ -908,7 +910,8 @@
   }
 
   function toggleSwitch(el) {
-    el.classList.toggle('on');
+    const on = el.classList.toggle('on');
+    el.setAttribute('aria-pressed', String(on));
   }
 
   function useLocation() {
@@ -916,6 +919,26 @@
     input.value = 'Detecting…';
     setTimeout(() => { input.value = '123 Main St, Denver CO 80218'; }, 600);
   }
+
+  // Div-based controls have click handlers but no native keyboard support.
+  // Expose them as buttons and activate on Enter/Space so they're reachable
+  // via keyboard and announced by screen readers.
+  document.querySelectorAll('.toggle, .comfort-card, .back').forEach(el => {
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    if (el.classList.contains('toggle')) {
+      el.setAttribute('aria-pressed', String(el.classList.contains('on')));
+    }
+    if (el.classList.contains('back')) {
+      el.setAttribute('aria-label', 'Go back');
+    }
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        el.click();
+      }
+    });
+  });
 
   renderProgress();
 </script>
