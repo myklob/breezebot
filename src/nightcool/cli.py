@@ -251,9 +251,7 @@ def web_push_keys() -> None:
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
     typer.echo(f"    vapid_public_key: \"{public}\"")
-    typer.echo(f"    vapid_private_key: |")
-    for line in private.splitlines():
-        typer.echo(f"      {line}")
+    typer.echo(f"    vapid_private_key: \"{private}\"")
     typer.echo("    vapid_subject: \"mailto:you@example.com\"")
 
 

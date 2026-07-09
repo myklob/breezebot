@@ -80,3 +80,34 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
     assert (tmp_path / "data.sqlite").exists()
+
+
+def test_run_once_rereads_state_before_final_write(tmp_path):
+    """State written during send() (pruned subscriptions, web-API writes)
+    must survive the post-notify write, not be clobbered by a stale snapshot."""
+    state_path = tmp_path / "state.json"
+    cfg = _make_cfg(tmp_path)
+    st: dict = {}
+    set_indoor_temp(st, 71.0, datetime.now())
+    write_state(state_path, st)
+
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = MockWeatherProvider(_cool_forecast(fake_now))
+
+    class MutatingNotifier:
+        def send(self, title: str, body: str) -> None:
+            data = json.loads(state_path.read_text())
+            data["push_subscriptions"] = [{"endpoint": "https://push.test/kept"}]
+            state_path.write_text(json.dumps(data))
+
+    with patch("nightcool.daemon.datetime") as dt, patch(
+        "nightcool.daemon._build_notifier", return_value=MutatingNotifier()
+    ):
+        dt.now.return_value = fake_now
+        dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        rec = run_once(cfg, state_path, provider=provider)
+
+    assert rec.action == "open"
+    stored = json.loads(state_path.read_text())
+    assert stored["last_action"] == "open"
+    assert stored["push_subscriptions"] == [{"endpoint": "https://push.test/kept"}]

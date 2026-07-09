@@ -266,8 +266,14 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # The daemon logs one row per poll, so a night with windows open is
+        # many consecutive "open" rows. Count open *events* (edges), not rows.
+        open_events = sum(
+            1
+            for i, o in enumerate(obs)
+            if o.action == "open" and (i == 0 or obs[i - 1].action != "open")
+        )
+        kwh, dollars = estimate_savings(model, hours_avoided=open_events * 6.0)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +285,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_events,
         }
 
     if STATIC_DIR.exists():

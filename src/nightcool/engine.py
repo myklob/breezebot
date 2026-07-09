@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, tzinfo
 from typing import Literal
 
 from .config import (
@@ -180,6 +180,7 @@ def _find_close_moment(
     prefs: Prefs,
     floor: ComfortFloor,
     schedule: DailySchedule,
+    tz: tzinfo | None = None,
 ) -> tuple[datetime, str | None]:
     """Earliest of:
       * outdoor crossing back above (indoor - hysteresis)
@@ -206,7 +207,10 @@ def _find_close_moment(
             break
 
     # The morning close: use the leave_at for the day we'd be waking into.
-    morning_leave = _morning_leave_after(open_moment.timestamp, schedule, prefs)
+    # NWS timestamps carry a fixed UTC offset; convert to the wall-clock zone
+    # first so the leave_at construction lands on the right offset across DST.
+    open_ts = open_moment.timestamp if tz is None else open_moment.timestamp.astimezone(tz)
+    morning_leave = _morning_leave_after(open_ts, schedule, prefs)
 
     candidates: list[tuple[datetime, str]] = []
     if warmup_at is not None:
@@ -283,6 +287,7 @@ def decide_actions(
         if eligible and starts_in <= timedelta(hours=OPEN_LOOKAHEAD_HOURS):
             close_at, floor_warning = _find_close_moment(
                 hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule,
+                tz=now.tzinfo,
             )
             warn_list: list[str] = []
             if floor_warning:

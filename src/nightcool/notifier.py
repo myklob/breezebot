@@ -128,6 +128,11 @@ class WebPushNotifier(Notifier):
                     self._pruner(sub["endpoint"])
                 else:
                     logger.warning("web push failed for %s: %s", sub.get("endpoint"), e)
+            except ValueError as e:
+                # A malformed VAPID key raises before any network I/O; don't
+                # let a config problem kill the whole poll cycle.
+                logger.error("web push misconfigured (bad VAPID key?): %s", e)
+                return
 
 
 def make_notifier(
@@ -166,23 +171,20 @@ def generate_vapid_keys() -> tuple[str, str]:
     """Generate a fresh VAPID keypair, returned as (public, private) base64url.
 
     The same encoding the browser Push API expects in
-    `applicationServerKey` and that `pywebpush` accepts as
-    `vapid_private_key` (PEM works too, but the URL-safe base64 form
-    round-trips most cleanly through YAML).
+    `applicationServerKey`. The private key is the raw 32-byte scalar,
+    base64url-encoded — the only string form `pywebpush` accepts for
+    `vapid_private_key` (it treats PEM strings as file paths and fails
+    to parse them).
     """
     import base64
 
-    from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
 
     key = ec.generate_private_key(ec.SECP256R1())
-    priv_pem = key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption(),
-    ).decode("ascii")
+    priv_raw = key.private_numbers().private_value.to_bytes(32, "big")
+    priv_b64 = base64.urlsafe_b64encode(priv_raw).rstrip(b"=").decode("ascii")
 
     pub_numbers = key.public_key().public_numbers()
     raw = b"\x04" + pub_numbers.x.to_bytes(32, "big") + pub_numbers.y.to_bytes(32, "big")
     pub_b64 = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-    return pub_b64, priv_pem
+    return pub_b64, priv_b64

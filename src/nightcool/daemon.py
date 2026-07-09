@@ -133,6 +133,9 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
+        # send() may have pruned subscriptions (and the web process may have
+        # written meanwhile) — re-read so we don't persist a stale snapshot.
+        state = read_state(state_path)
         set_last_action(state, rec.action, now)
         write_state(state_path, state)
         logger.info("Notified: %s — %s", title, body)

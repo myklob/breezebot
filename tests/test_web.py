@@ -166,3 +166,42 @@ def test_static_index_served(client):
     r = c.get("/")
     assert r.status_code == 200
     assert "NightCool" in r.text
+
+
+def test_savings_counts_open_events_not_poll_rows(client):
+    c, _, cfg, _ = client
+    from nightcool.thermal import Observation, ThermalModel, connect, log_observation
+
+    conn = connect(Path(cfg.web.data_log_path))
+    base = datetime(2024, 6, 15, 22, 0, tzinfo=timezone.utc)
+    # Two open windows across many 15-minute polls: open×3, close, open×2.
+    actions = ["open", "open", "open", "close", "open", "open"]
+    for i, action in enumerate(actions):
+        log_observation(
+            conn,
+            Observation(
+                ts=base + timedelta(minutes=15 * i),
+                indoor_f=71.0,
+                outdoor_f=62.0,
+                wind_mph=5.0,
+                rain_pct=0.0,
+                action=action,
+                windows_open=action == "open",
+                hvac_active=False,
+                indoor_source="manual",
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    fake_model = ThermalModel(
+        alpha_ventilation=0.1, beta_solar=0.0, gamma_hvac=0.0,
+        sample_count=6, duration_hours=1.5, r_squared=0.9,
+    )
+    with patch("nightcool.web.app.fit_model", return_value=fake_model):
+        r = c.get("/api/savings")
+
+    assert r.status_code == 200
+    body = r.json()
+    # 5 "open" rows but only 2 distinct open events.
+    assert body["open_events_counted"] == 2
