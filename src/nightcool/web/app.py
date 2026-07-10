@@ -183,7 +183,9 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Preserve the stored time on partial updates; the `if new_home`
+            # branch below clears it when home_all_day is actually set.
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +268,17 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # Sum the actual time spent in the "open" state from consecutive poll
+        # timestamps; counting rows would tally every 15-minute poll as a
+        # separate 6-hour event. Gaps over an hour mean the daemon was down.
+        open_hours = 0.0
+        for prev, cur in zip(obs, obs[1:]):
+            if prev.action != "open":
+                continue
+            dt = (cur.ts - prev.ts).total_seconds() / 3600.0
+            if 0 < dt <= 1.0:
+                open_hours += dt
+        kwh, dollars = estimate_savings(model, hours_avoided=open_hours)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +290,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_hours_counted": round(open_hours, 2),
         }
 
     if STATIC_DIR.exists():

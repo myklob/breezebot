@@ -125,6 +125,35 @@ windows: [{id: w, name: W, exposure: exposed, security: secure}]
     assert raw["schedule"]["mon"]["leave_at"].startswith("08:00")
 
 
+def test_post_schedule_day_keeps_leave_at_when_unchecking_home_all_day(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        c.post("/api/schedule/mon", json={"leave_at": "07:30"})
+        # The UI sends only the changed field; this must not erase leave_at.
+        r = c.post("/api/schedule/mon", json={"home_all_day": False})
+        assert r.status_code == 200
+        # Setting home_all_day true is the one case that clears it.
+        r = c.post("/api/schedule/tue", json={"leave_at": "07:30"})
+        r = c.post("/api/schedule/tue", json={"home_all_day": True})
+    import yaml
+    raw = yaml.safe_load(config_path.read_text())
+    assert raw["schedule"]["mon"]["leave_at"].startswith("07:30")
+    assert raw["schedule"]["mon"]["home_all_day"] is False
+    assert raw["schedule"]["tue"].get("leave_at") is None
+
+
 def test_post_geocode_resolves_and_persists(client):
     c, state, cfg, _ = client
     fake = GeocodeResult(latitude=39.74, longitude=-104.99, matched_address="Denver, CO")
