@@ -221,6 +221,20 @@ def test_open_close_at_pulled_in_when_floor_would_be_hit():
     assert rec.warnings  # we surface the floor reason
 
 
+def test_floor_warning_survives_tie_with_warmup_hour():
+    # Slow cooling toward a high floor: the predicted indoor path crosses the
+    # floor at the same forecast hour the outdoor temp rebounds past the
+    # hysteresis threshold. The floor warning must win the tie — it's the one
+    # with a consequence.
+    forecast = [make_hour(0, 70.0), make_hour(1, 77.4), make_hour(2, 77.5)] + [
+        make_hour(i, 79.0) for i in range(3, 12)
+    ]
+    rec = _decide(80.0, forecast, [make_window()], target_f=75.0, floor=78.5)
+    assert rec.action == "open"
+    assert rec.warnings
+    assert "floor" in rec.warnings[0]
+
+
 def test_open_suppressed_if_floor_overshot_immediately():
     # Floor exactly at indoor; first prediction step would already be below.
     forecast = [make_hour(i, 55.0) for i in range(12)]

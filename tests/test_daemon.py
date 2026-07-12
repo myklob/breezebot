@@ -20,7 +20,7 @@ from nightcool.config import (
 )
 from nightcool.daemon import run_once
 from nightcool.engine import HourlyForecast
-from nightcool.state import set_indoor_temp, write_state
+from nightcool.state import add_subscription, read_state, set_indoor_temp, write_state
 from nightcool.weather import MockWeatherProvider
 
 
@@ -80,3 +80,41 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
     assert (tmp_path / "data.sqlite").exists()
+
+
+class _ConcurrentWriteProvider(MockWeatherProvider):
+    """Writes a push subscription to the state file during the forecast fetch,
+    simulating the web server persisting state while a poll is in flight."""
+
+    def __init__(self, hours, state_path: Path) -> None:
+        super().__init__(hours)
+        self._state_path = state_path
+
+    def hourly_forecast(self, hours: int = 12):
+        st = read_state(self._state_path)
+        add_subscription(st, {"endpoint": "https://push.example.com/e", "keys": {"auth": "x"}})
+        write_state(self._state_path, st)
+        return super().hourly_forecast(hours)
+
+
+def test_run_once_does_not_clobber_concurrent_state_writes(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    cfg = _make_cfg(tmp_path)
+    st: dict = {}
+    set_indoor_temp(st, 71.0, datetime.now())
+    write_state(state_path, st)
+
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = _ConcurrentWriteProvider(_cool_forecast(fake_now), state_path)
+
+    with patch("nightcool.daemon.datetime") as dt:
+        dt.now.return_value = fake_now
+        dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        rec = run_once(cfg, state_path, provider=provider)
+
+    assert rec.action == "open"
+    stored = json.loads(state_path.read_text())
+    assert stored["last_action"] == "open"
+    assert stored.get("push_subscriptions"), (
+        "subscription written mid-poll was clobbered by the poll's stale snapshot"
+    )

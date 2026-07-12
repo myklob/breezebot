@@ -115,13 +115,18 @@ def run_once(
     state = read_state(state_path)
     indoor, source_name = read_indoor_temp(cfg, state)
     if provider is None:
+        cache_before = state.get("location_cache")
         try:
             provider = _make_provider(cfg, state)
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        if state.get("location_cache") != cache_before:
+            # Persist newly-cached coordinates. Re-read first: the web server
+            # writes this file too, and our snapshot may be stale by now.
+            fresh = read_state(state_path)
+            fresh["location_cache"] = state["location_cache"]
+            write_state(state_path, fresh)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +138,13 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # Re-read before writing: the snapshot from the top of the poll is
+        # seconds old (forecast fetch + push send), and writing it back
+        # wholesale would erase anything the web server persisted meanwhile
+        # (subscriptions, manual indoor temps).
+        fresh = read_state(state_path)
+        set_last_action(fresh, rec.action, now)
+        write_state(state_path, fresh)
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

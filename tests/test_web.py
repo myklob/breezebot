@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+import math
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -125,6 +126,33 @@ windows: [{id: w, name: W, exposure: exposed, security: secure}]
     assert raw["schedule"]["mon"]["leave_at"].startswith("08:00")
 
 
+def test_unchecking_home_all_day_preserves_leave_at(tmp_path):
+    # The PWA sends only the changed field, so unchecking the box POSTs
+    # {"home_all_day": false} with no leave_at — that must not erase the
+    # stored leave time.
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+schedule: {mon: {target_f: 65, leave_at: "07:30", home_all_day: false}}
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        r = c.post("/api/schedule/mon", json={"home_all_day": False})
+        assert r.status_code == 200
+    assert cfg.schedule.mon.leave_at == time(7, 30)
+    import yaml
+    raw = yaml.safe_load(config_path.read_text())
+    assert raw["schedule"]["mon"]["leave_at"].startswith("07:30")
+
+
 def test_post_geocode_resolves_and_persists(client):
     c, state, cfg, _ = client
     fake = GeocodeResult(latitude=39.74, longitude=-104.99, matched_address="Denver, CO")
@@ -159,6 +187,49 @@ def test_savings_returns_null_model_when_no_data(client):
     r = c.get("/api/savings")
     assert r.status_code == 200
     assert r.json()["model"] is None
+
+
+def test_savings_counts_open_events_not_poll_rows(client):
+    # The daemon logs "open" on every 15-minute poll while the criteria hold;
+    # savings must be priced per open *event* (transition into "open"), not
+    # per logged row.
+    import random
+    from nightcool.thermal import MIN_SAMPLES, Observation, connect, log_observation
+
+    c, _, cfg, _ = client
+    random.seed(0)
+    conn = connect(Path(cfg.web.data_log_path))
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    indoor = 72.0
+    n = MIN_SAMPLES + 40
+    expected_events = 0
+    prev_open = False
+    for i in range(n):
+        outdoor = 60.0 + 8.0 * math.sin(i / 6.0)
+        windows_open = (i % 8) < 4
+        hvac = (i % 20) < 5
+        vent = (1.0 if windows_open else 0.0) * (outdoor - indoor)
+        solar = 50.0 - outdoor
+        indoor += (1.6 * vent + 0.1 * solar + (-5.0 if hvac else 0.0)) * 0.25 + random.gauss(0, 0.05)
+        if windows_open and not prev_open:
+            expected_events += 1
+        prev_open = windows_open
+        log_observation(conn, Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=indoor, outdoor_f=outdoor,
+            wind_mph=0, rain_pct=0,
+            action="open" if windows_open else "no_change",
+            windows_open=windows_open, hvac_active=hvac,
+        ))
+    conn.close()
+
+    r = c.get("/api/savings")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["model"] is not None
+    assert data["open_events_counted"] == expected_events
+    open_rows = sum(1 for i in range(n) if (i % 8) < 4)
+    assert expected_events < open_rows  # the old per-row count would be ~4x this
 
 
 def test_static_index_served(client):

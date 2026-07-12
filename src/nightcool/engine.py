@@ -208,15 +208,18 @@ def _find_close_moment(
     # The morning close: use the leave_at for the day we'd be waking into.
     morning_leave = _morning_leave_after(open_moment.timestamp, schedule, prefs)
 
-    candidates: list[tuple[datetime, str]] = []
-    if warmup_at is not None:
-        candidates.append((warmup_at, "outdoor warmed back up"))
+    # Floor first so it wins timestamp ties: `min` is stable, and when the
+    # floor hit lands on the same forecast hour as a warmup, the floor
+    # warning is the one worth surfacing.
+    candidates: list[tuple[datetime, str, bool]] = []
     if floor_hit is not None:
-        candidates.append((floor_hit, f"indoor would hit {floor.min_indoor_f:.0f} °F floor"))
-    candidates.append((morning_leave, "morning routine"))
+        candidates.append((floor_hit, f"indoor would hit {floor.min_indoor_f:.0f} °F floor", True))
+    if warmup_at is not None:
+        candidates.append((warmup_at, "outdoor warmed back up", False))
+    candidates.append((morning_leave, "morning routine", False))
 
-    best_ts, best_reason = min(candidates, key=lambda c: c[0])
-    warning = best_reason if best_ts is floor_hit else None
+    best_ts, best_reason, is_floor = min(candidates, key=lambda c: c[0])
+    warning = best_reason if is_floor else None
     return best_ts, warning
 
 

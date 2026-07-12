@@ -84,8 +84,14 @@ def create_app(
         if provider is not None:
             return provider
         state = read_state(state_path)
+        cache_before = state.get("location_cache")
         lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        if state.get("location_cache") != cache_before:
+            # Re-read before persisting the new cache: another request (or
+            # the daemon) may have written the file since our snapshot.
+            fresh = read_state(state_path)
+            fresh["location_cache"] = state["location_cache"]
+            write_state(state_path, fresh)
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +189,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +272,15 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # Count open *events* (transitions into "open"), not poll rows — the
+        # daemon logs "open" every 15 minutes for as long as the criteria hold.
+        open_events = 0
+        prev_action: str | None = None
+        for o in obs:
+            if o.action == "open" and prev_action != "open":
+                open_events += 1
+            prev_action = o.action
+        kwh, dollars = estimate_savings(model, hours_avoided=open_events * 6.0)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +292,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_events,
         }
 
     if STATIC_DIR.exists():
