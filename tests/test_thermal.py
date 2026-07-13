@@ -11,6 +11,7 @@ from nightcool.thermal import (
     connect,
     estimate_savings,
     fit_model,
+    hours_recommended_open,
     load_observations,
     log_observation,
 )
@@ -101,3 +102,64 @@ def test_estimate_savings_scales_with_hours():
 
     kwh_zero, _ = estimate_savings(None, hours_avoided=-1.0)
     assert kwh_zero == 0.0
+
+
+def test_fit_model_learns_solar_when_windows_and_hvac_unsensed():
+    # The daemon logs windows_open=None / hvac_active=None (no sensors), so
+    # the vent and HVAC feature columns are all zeros. The fit must still
+    # recover the solar coefficient instead of collapsing to all zeros.
+    random.seed(1)
+    rows: list[Observation] = []
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    indoor = 72.0
+    for i in range(MIN_SAMPLES + 40):
+        outdoor = 60.0 + 8.0 * math.sin(i / 6.0)
+        solar = 50.0 - outdoor
+        dT = (0.1 * solar) * 0.25
+        indoor += dT + random.gauss(0, 0.02)
+        rows.append(Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=indoor,
+            outdoor_f=outdoor,
+            wind_mph=0, rain_pct=0, action="no_change",
+            windows_open=None, hvac_active=None,
+        ))
+    model = fit_model(rows)
+    assert model is not None
+    assert model.beta_solar != 0.0
+    assert model.r_squared > 0.5
+    # The dead features stay at zero rather than poisoning the solve.
+    assert model.alpha_ventilation == 0.0
+    assert model.gamma_hvac == 0.0
+
+
+def _obs_at(base, minutes, action):
+    return Observation(
+        ts=base + timedelta(minutes=minutes),
+        indoor_f=72.0, outdoor_f=60.0,
+        wind_mph=0, rain_pct=0, action=action,
+        windows_open=None, hvac_active=None,
+    )
+
+
+def test_hours_recommended_open_counts_sample_gaps_not_fixed_blocks():
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    obs = [
+        _obs_at(base, 0, "open"),
+        _obs_at(base, 15, "open"),
+        _obs_at(base, 30, "no_change"),
+        _obs_at(base, 45, "open"),   # trailing sample: no next row, not counted
+    ]
+    assert hours_recommended_open(obs) == 0.5
+
+
+def test_hours_recommended_open_skips_daemon_downtime_gaps():
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    obs = [
+        _obs_at(base, 0, "open"),
+        _obs_at(base, 15, "open"),
+        # Daemon was down for five hours; the "open" row before the gap
+        # must not claim the whole outage.
+        _obs_at(base, 15 + 300, "no_change"),
+    ]
+    assert hours_recommended_open(obs) == 0.25

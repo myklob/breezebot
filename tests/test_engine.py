@@ -257,3 +257,21 @@ def test_dew_point_gate_passes_through_unknown_dew_point():
     forecast = [make_hour(i, 65.0, dew_point_f=None) for i in range(12)]
     rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
     assert rec.action == "open"
+
+
+def test_dew_point_gate_boundary_equal_dew_point_passes():
+    # Gate is strictly greater-than: dew point exactly at the limit opens.
+    forecast = [make_hour(i, 65.0, dew_point_f=60.0) for i in range(12)]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action == "open"
+
+
+def test_dew_point_gate_waits_for_the_dry_hours():
+    # Muggy now, dry within the two-hour lookahead: open, but not until the
+    # air dries.
+    forecast = [
+        make_hour(i, 65.0, dew_point_f=70.0 if i < 2 else 50.0) for i in range(12)
+    ]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action == "open"
+    assert rec.open_at == forecast[2].timestamp

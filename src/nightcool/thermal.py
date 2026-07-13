@@ -140,35 +140,48 @@ def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple
     """
     n = len(rows)
     # Build X^T X (3x3) and X^T y (3,) by accumulation.
-    a = [[0.0] * 3 for _ in range(3)]
-    b = [0.0, 0.0, 0.0]
+    full_a = [[0.0] * 3 for _ in range(3)]
+    full_b = [0.0, 0.0, 0.0]
     y_mean = sum(r[0] for r in rows) / n
     tss = 0.0
     for dy, x1, x2, x3 in rows:
         xs = (x1, x2, x3)
         for i in range(3):
-            b[i] += xs[i] * dy
+            full_b[i] += xs[i] * dy
             for j in range(3):
-                a[i][j] += xs[i] * xs[j]
+                full_a[i][j] += xs[i] * xs[j]
         tss += (dy - y_mean) ** 2
 
-    # Solve 3x3 system via Gaussian elimination.
-    for k in range(3):
+    # A feature whose column is all zeros (e.g. windows_open is never
+    # sensed, so the vent driver is 0 everywhere) contributes a zero row and
+    # column; drop it and fit the remaining features instead of bailing out.
+    active = [i for i in range(3) if full_a[i][i] > 1e-12]
+    m = len(active)
+    if m == 0:
+        return ((0.0, 0.0, 0.0), 0.0)
+    a = [[full_a[i][j] for j in active] for i in active]
+    b = [full_b[i] for i in active]
+
+    # Solve the reduced m x m system via Gaussian elimination.
+    for k in range(m):
         # Partial pivot for numerical stability.
-        pivot = max(range(k, 3), key=lambda i: abs(a[i][k]))
+        pivot = max(range(k, m), key=lambda i: abs(a[i][k]))
         if pivot != k:
             a[k], a[pivot] = a[pivot], a[k]
             b[k], b[pivot] = b[pivot], b[k]
         if abs(a[k][k]) < 1e-12:
             return ((0.0, 0.0, 0.0), 0.0)
-        for i in range(k + 1, 3):
+        for i in range(k + 1, m):
             f = a[i][k] / a[k][k]
-            for j in range(k, 3):
+            for j in range(k, m):
                 a[i][j] -= f * a[k][j]
             b[i] -= f * b[k]
+    reduced = [0.0] * m
+    for i in range(m - 1, -1, -1):
+        reduced[i] = (b[i] - sum(a[i][j] * reduced[j] for j in range(i + 1, m))) / a[i][i]
     coefs = [0.0, 0.0, 0.0]
-    for i in range(2, -1, -1):
-        coefs[i] = (b[i] - sum(a[i][j] * coefs[j] for j in range(i + 1, 3))) / a[i][i]
+    for idx, coef in zip(active, reduced):
+        coefs[idx] = coef
     alpha, beta, gamma = coefs
 
     rss = 0.0
@@ -219,6 +232,24 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
         duration_hours=duration,
         r_squared=r2,
     )
+
+
+def hours_recommended_open(obs: Iterable[Observation]) -> float:
+    """Total hours the engine's recommendation stood at "open".
+
+    Each observation is one poll sample, so an "open" row covers the gap to
+    the next sample — not a fixed block of time. Gaps over an hour mean the
+    daemon was down; don't count them.
+    """
+    pts = list(obs)
+    total = 0.0
+    for prev, cur in zip(pts, pts[1:]):
+        if prev.action != "open":
+            continue
+        dt_hours = (cur.ts - prev.ts).total_seconds() / 3600.0
+        if 0.0 < dt_hours <= 1.0:
+            total += dt_hours
+    return total
 
 
 # ---- Savings ----
