@@ -34,10 +34,11 @@ from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
     list_subscriptions,
+    mutate_state,
     read_state,
     remove_subscription,
     set_indoor_temp,
-    write_state,
+    update_state,
 )
 from ..thermal import connect, estimate_savings, fit_model, load_observations
 from ..weather import NWSProvider, WeatherProvider
@@ -85,7 +86,8 @@ def create_app(
             return provider
         state = read_state(state_path)
         lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        if "location_cache" in state:
+            update_state(state_path, {"location_cache": state["location_cache"]})
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +185,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -203,9 +205,8 @@ def create_app(
 
     @app.post("/api/indoor-temp")
     def post_indoor_temp(payload: IndoorTempIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        set_indoor_temp(st, payload.temperature_f, now_local())
-        write_state(state_path, st)
+        now = now_local()
+        mutate_state(state_path, lambda s: set_indoor_temp(s, payload.temperature_f, now))
         return {"ok": True, "indoor_f": payload.temperature_f}
 
     @app.post("/api/geocode")
@@ -220,9 +221,7 @@ def create_app(
         if config_path is not None:
             _save_config()
         # Clear the cache so the next poll re-resolves.
-        st = read_state(state_path)
-        st.pop("location_cache", None)
-        write_state(state_path, st)
+        mutate_state(state_path, lambda s: s.pop("location_cache", None))
         return {
             "ok": True,
             "matched_address": result.matched_address,
@@ -239,18 +238,13 @@ def create_app(
 
     @app.post("/api/subscribe")
     def post_subscribe(sub: SubscriptionIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        added = add_subscription(st, sub.model_dump(exclude_none=True))
-        if added:
-            write_state(state_path, st)
+        payload = sub.model_dump(exclude_none=True)
+        st, added = mutate_state(state_path, lambda s: add_subscription(s, payload))
         return {"ok": True, "added": added, "total": len(list_subscriptions(st))}
 
     @app.post("/api/unsubscribe")
     def post_unsubscribe(payload: UnsubscribeIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        removed = remove_subscription(st, payload.endpoint)
-        if removed:
-            write_state(state_path, st)
+        _, removed = mutate_state(state_path, lambda s: remove_subscription(s, payload.endpoint))
         return {"ok": True, "removed": removed}
 
     @app.get("/api/savings")

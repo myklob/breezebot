@@ -166,3 +166,28 @@ def test_static_index_served(client):
     r = c.get("/")
     assert r.status_code == 200
     assert "NightCool" in r.text
+
+
+def test_post_schedule_home_all_day_false_preserves_leave_at(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+schedule:
+  mon: {target_f: 68, leave_at: "07:30", home_all_day: false}
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        r = c.post("/api/schedule/mon", json={"target_f": 70.0, "home_all_day": False})
+        assert r.status_code == 200
+    import yaml
+    raw = yaml.safe_load(config_path.read_text())
+    assert raw["schedule"]["mon"]["target_f"] == 70.0
+    assert str(raw["schedule"]["mon"]["leave_at"]).startswith("07:30")

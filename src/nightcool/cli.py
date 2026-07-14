@@ -21,7 +21,7 @@ from .daemon import (
 from .engine import decide_actions
 from .geocode import GeocodeError, geocode as do_geocode
 from .notifier import generate_vapid_keys
-from .state import read_state, set_indoor_temp, write_state
+from .state import mutate_state, read_state, set_indoor_temp, update_state
 from .weather import NWSProvider
 
 
@@ -37,6 +37,12 @@ def _load(path: Path) -> AppConfig:
     return load_config(path)
 
 
+def _read_raw(path: Path) -> dict:
+    if not path.exists():
+        raise typer.BadParameter(f"Config file not found: {path}")
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
 @app.command()
 def check(
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
@@ -49,7 +55,8 @@ def check(
     st = read_state(state)
     indoor, source_name = read_indoor_temp(cfg, st)
     lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    if "location_cache" in st:
+        update_state(state, {"location_cache": st["location_cache"]})
     provider = NWSProvider(lat, lon)
     forecast = provider.hourly_forecast(hours=12)
     rec = decide_actions(
@@ -85,7 +92,8 @@ def forecast(
     cfg = _load(config)
     st = read_state(state)
     lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    if "location_cache" in st:
+        update_state(state, {"location_cache": st["location_cache"]})
     provider = NWSProvider(lat, lon)
     hours = provider.hourly_forecast(hours=12)
     typer.echo(f"{'Time':<25} {'Temp°F':>7} {'Wind':>6} {'Gust':>6} {'Dir°':>5} {'Rain%':>6}")
@@ -133,9 +141,8 @@ def set_indoor(
     state: Path = typer.Option(DEFAULT_STATE, "--state", "-s"),
 ) -> None:
     """Record the current indoor temperature."""
-    st = read_state(state)
-    set_indoor_temp(st, temp, datetime.now())
-    write_state(state, st)
+    now = datetime.now()
+    mutate_state(state, lambda s: set_indoor_temp(s, temp, now))
     typer.echo(f"Indoor temp set to {temp:.1f}°F")
 
 
@@ -205,7 +212,7 @@ def set_target(
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
 ) -> None:
     """Set the target indoor temperature for a day (or all days)."""
-    raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+    raw = _read_raw(config)
     sched = raw.setdefault("schedule", {})
     days = WEEKDAY_KEYS if day == "all" else (day,)
     for d in days:
@@ -223,7 +230,7 @@ def set_leave_time(
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
 ) -> None:
     """Set your typical departure time for a day so CLOSE pings know when to back off."""
-    raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+    raw = _read_raw(config)
     sched = raw.setdefault("schedule", {})
     days = ("mon", "tue", "wed", "thu", "fri") if day == "weekdays" else (day,)
     for d in days:
@@ -234,7 +241,12 @@ def set_leave_time(
             entry["home_all_day"] = True
             entry.pop("leave_at", None)
         else:
-            time.fromisoformat(leave_at)  # Validate format.
+            try:
+                time.fromisoformat(leave_at)
+            except ValueError:
+                raise typer.BadParameter(
+                    f'invalid leave time {leave_at!r}; expected "HH:MM" (zero-padded) or "home"'
+                )
             entry["leave_at"] = leave_at
             entry["home_all_day"] = False
     config.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
@@ -251,9 +263,7 @@ def web_push_keys() -> None:
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
     typer.echo(f"    vapid_public_key: \"{public}\"")
-    typer.echo(f"    vapid_private_key: |")
-    for line in private.splitlines():
-        typer.echo(f"      {line}")
+    typer.echo(f"    vapid_private_key: \"{private}\"")
     typer.echo("    vapid_subject: \"mailto:you@example.com\"")
 
 

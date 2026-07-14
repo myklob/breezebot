@@ -101,3 +101,23 @@ def test_estimate_savings_scales_with_hours():
 
     kwh_zero, _ = estimate_savings(None, hours_avoided=-1.0)
     assert kwh_zero == 0.0
+
+
+def test_fit_model_returns_none_when_ventilation_never_observed():
+    # Real daemons log windows_open=None every poll; the vent feature is then
+    # identically zero and the regression is singular — never fabricate a model.
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    obs = [
+        Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=70.0 + 0.01 * i,
+            outdoor_f=60.0 + (i % 5),
+            wind_mph=0.0,
+            rain_pct=0.0,
+            action="open" if i % 7 == 0 else None,
+            windows_open=None,
+            hvac_active=None,
+        )
+        for i in range(MIN_SAMPLES + 8)
+    ]
+    assert fit_model(obs) is None

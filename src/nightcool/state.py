@@ -9,9 +9,15 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — Windows; falls back to no locking.
+    fcntl = None  # type: ignore[assignment]
 
 
 def read_state(path: Path) -> dict[str, Any]:
@@ -37,6 +43,43 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+@contextmanager
+def _file_lock(path: Path) -> Iterator[None]:
+    """Exclusive inter-process lock keyed to the state file."""
+    if fcntl is None:
+        yield
+        return
+    lock_path = Path(path).with_name(Path(path).name + ".lock")
+    with open(lock_path, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def mutate_state(path: Path, fn: Callable[[dict[str, Any]], Any]) -> tuple[dict[str, Any], Any]:
+    """Read-modify-write the state file under an exclusive lock.
+
+    The daemon, web server, and CLI share state.json across processes;
+    writers must mutate a freshly-read copy inside the lock (never persist
+    a dict read earlier) or they clobber each other's keys.
+
+    Returns (state after mutation, fn's return value).
+    """
+    with _file_lock(path):
+        state = read_state(path)
+        result = fn(state)
+        write_state(path, state)
+    return state, result
+
+
+def update_state(path: Path, updates: dict[str, Any]) -> dict[str, Any]:
+    """Merge `updates` into the on-disk state under the lock."""
+    state, _ = mutate_state(path, lambda s: s.update(updates))
+    return state
 
 
 def get_last_action(state: dict[str, Any]) -> str | None:
