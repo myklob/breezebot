@@ -5,7 +5,7 @@ from datetime import time
 
 import pytest
 
-from nightcool.config import Exposure, Security, load_config
+from nightcool.config import Exposure, load_config
 
 
 VALID_YAML = """

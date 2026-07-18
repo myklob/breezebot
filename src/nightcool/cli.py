@@ -164,7 +164,9 @@ def serve(
     cfg = _load(config)
     from .web import run_server
     if open_browser:
-        import threading, time as _time, webbrowser
+        import threading
+        import time as _time
+        import webbrowser
         def _later() -> None:
             _time.sleep(1.0)
             webbrowser.open(f"http://{cfg.web.host}:{cfg.web.port}")
@@ -251,7 +253,7 @@ def web_push_keys() -> None:
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
     typer.echo(f"    vapid_public_key: \"{public}\"")
-    typer.echo(f"    vapid_private_key: |")
+    typer.echo("    vapid_private_key: |")
     for line in private.splitlines():
         typer.echo(f"      {line}")
     typer.echo("    vapid_subject: \"mailto:you@example.com\"")
