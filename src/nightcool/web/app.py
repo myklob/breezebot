@@ -37,7 +37,7 @@ from ..state import (
     read_state,
     remove_subscription,
     set_indoor_temp,
-    write_state,
+    update_state,
 )
 from ..thermal import connect, estimate_savings, fit_model, load_observations
 from ..weather import NWSProvider, WeatherProvider
@@ -83,9 +83,7 @@ def create_app(
     def get_provider() -> WeatherProvider:
         if provider is not None:
             return provider
-        state = read_state(state_path)
-        lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        lat, lon = update_state(state_path, lambda st: resolve_coordinates(cfg, st))
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +181,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -203,9 +201,10 @@ def create_app(
 
     @app.post("/api/indoor-temp")
     def post_indoor_temp(payload: IndoorTempIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        set_indoor_temp(st, payload.temperature_f, now_local())
-        write_state(state_path, st)
+        update_state(
+            state_path,
+            lambda st: set_indoor_temp(st, payload.temperature_f, now_local()),
+        )
         return {"ok": True, "indoor_f": payload.temperature_f}
 
     @app.post("/api/geocode")
@@ -220,9 +219,7 @@ def create_app(
         if config_path is not None:
             _save_config()
         # Clear the cache so the next poll re-resolves.
-        st = read_state(state_path)
-        st.pop("location_cache", None)
-        write_state(state_path, st)
+        update_state(state_path, lambda st: st.pop("location_cache", None))
         return {
             "ok": True,
             "matched_address": result.matched_address,
@@ -239,18 +236,18 @@ def create_app(
 
     @app.post("/api/subscribe")
     def post_subscribe(sub: SubscriptionIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        added = add_subscription(st, sub.model_dump(exclude_none=True))
-        if added:
-            write_state(state_path, st)
-        return {"ok": True, "added": added, "total": len(list_subscriptions(st))}
+        def mutate(st: dict[str, Any]) -> tuple[bool, int]:
+            added = add_subscription(st, sub.model_dump(exclude_none=True))
+            return added, len(list_subscriptions(st))
+
+        added, total = update_state(state_path, mutate)
+        return {"ok": True, "added": added, "total": total}
 
     @app.post("/api/unsubscribe")
     def post_unsubscribe(payload: UnsubscribeIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        removed = remove_subscription(st, payload.endpoint)
-        if removed:
-            write_state(state_path, st)
+        removed = update_state(
+            state_path, lambda st: remove_subscription(st, payload.endpoint)
+        )
         return {"ok": True, "removed": removed}
 
     @app.get("/api/savings")
@@ -266,8 +263,14 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # Consecutive "open" polls are one event; count only the transitions.
+        open_events = 0
+        prev_action: str | None = None
+        for o in obs:
+            if o.action == "open" and prev_action != "open":
+                open_events += 1
+            prev_action = o.action
+        kwh, dollars = estimate_savings(model, hours_avoided=open_events * 6.0)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +282,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_events,
         }
 
     if STATIC_DIR.exists():

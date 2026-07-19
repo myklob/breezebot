@@ -120,3 +120,28 @@ def test_summary_returns_none_when_no_cool_hours():
     base = datetime(2024, 6, 15, tzinfo=timezone.utc)
     forecast = [make_hour(i, 80.0, base) for i in range(8)]
     assert summarize_missed_opportunity(forecast, 75.0, Prefs(), 65.0, WarningPrefs()) is None
+
+
+# ---- DST: morning close time stays on the local wall clock ----
+
+def test_close_at_uses_local_wall_clock_across_dst():
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/New_York")
+    # Sat 2024-11-02 21:00 EDT; DST ends 02:00 Sunday morning.
+    now = datetime(2024, 11, 2, 21, 0, tzinfo=tz)
+    # NWS forecast timestamps carry a fixed offset, not a zone.
+    edt = timezone(timedelta(hours=-4))
+    forecast = [make_hour(i, 62.0, datetime(2024, 11, 2, 21, 0, tzinfo=edt)) for i in range(12)]
+    day = DaySchedule(target_f=65.0, leave_at=time(7, 30))
+    sched = DailySchedule(mon=day, tue=day, wed=day, thu=day, fri=day, sat=day, sun=day)
+    rec = decide_actions(
+        75.0, forecast, [_window()], now,
+        schedule=sched, prefs=Prefs(),
+        comfort_floor=ComfortFloor(min_indoor_f=10.0),
+        warnings=WarningPrefs(),
+    )
+    assert rec.action == "open"
+    # Sunday 07:30 is EST (UTC-5) = 12:30 UTC. Carrying Saturday's EDT offset
+    # would land at 11:30 UTC — an hour early on the local clock.
+    assert rec.close_at == datetime(2024, 11, 3, 12, 30, tzinfo=timezone.utc)

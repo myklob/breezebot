@@ -180,6 +180,7 @@ def _find_close_moment(
     prefs: Prefs,
     floor: ComfortFloor,
     schedule: DailySchedule,
+    now: datetime,
 ) -> tuple[datetime, str | None]:
     """Earliest of:
       * outdoor crossing back above (indoor - hysteresis)
@@ -206,7 +207,14 @@ def _find_close_moment(
             break
 
     # The morning close: use the leave_at for the day we'd be waking into.
-    morning_leave = _morning_leave_after(open_moment.timestamp, schedule, prefs)
+    # Forecast timestamps carry a fixed UTC offset; re-anchor to the caller's
+    # timezone so the wall-clock leave time stays correct across DST changes.
+    open_local = (
+        open_moment.timestamp.astimezone(now.tzinfo)
+        if now.tzinfo is not None and open_moment.timestamp.tzinfo is not None
+        else open_moment.timestamp
+    )
+    morning_leave = _morning_leave_after(open_local, schedule, prefs)
 
     candidates: list[tuple[datetime, str]] = []
     if warmup_at is not None:
@@ -227,9 +235,12 @@ def _morning_leave_after(now_local: datetime, schedule: DailySchedule, prefs: Pr
         cand_date = (now_local + timedelta(days=offset)).date()
         day = schedule.for_weekday(cand_date.weekday())
         leave_at = day.leave_at or prefs.quiet_hours_end
-        cand = now_local.replace(
-            year=cand_date.year, month=cand_date.month, day=cand_date.day,
-            hour=leave_at.hour, minute=leave_at.minute, second=0, microsecond=0,
+        # combine() re-derives the UTC offset for the candidate date, unlike
+        # replace(), which would carry today's offset across a DST boundary.
+        cand = datetime.combine(
+            cand_date,
+            time(leave_at.hour, leave_at.minute),
+            tzinfo=now_local.tzinfo,
         )
         if cand > now_local:
             return cand
@@ -282,7 +293,7 @@ def decide_actions(
         starts_in = open_moment.timestamp - now
         if eligible and starts_in <= timedelta(hours=OPEN_LOOKAHEAD_HOURS):
             close_at, floor_warning = _find_close_moment(
-                hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule,
+                hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule, now,
             )
             warn_list: list[str] = []
             if floor_warning:

@@ -25,7 +25,7 @@ from .state import (
     read_state,
     remove_subscription,
     set_last_action,
-    write_state,
+    update_state,
 )
 from .thermal import Observation, connect, log_observation
 from .weather import NWSProvider, WeatherProvider
@@ -87,9 +87,7 @@ def _build_notifier(cfg: AppConfig, state_path: Path):
         return list_subscriptions(read_state(state_path))
 
     def pruner(endpoint: str) -> None:
-        st = read_state(state_path)
-        if remove_subscription(st, endpoint):
-            write_state(state_path, st)
+        update_state(state_path, lambda st: remove_subscription(st, endpoint))
 
     return make_notifier(
         cfg.notifications,
@@ -116,12 +114,12 @@ def run_once(
     indoor, source_name = read_indoor_temp(cfg, state)
     if provider is None:
         try:
-            provider = _make_provider(cfg, state)
+            # update_state re-reads under the lock and persists any
+            # newly-cached coordinates without clobbering concurrent writes.
+            provider = update_state(state_path, lambda st: _make_provider(cfg, st))
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +131,9 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # Re-read before writing: notifier.send may have pruned dead
+        # subscriptions, and the web server may have written indoor temp.
+        update_state(state_path, lambda st: set_last_action(st, rec.action, now))
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

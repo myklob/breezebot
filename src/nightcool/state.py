@@ -9,9 +9,17 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — non-POSIX fallback, no cross-process lock.
+    fcntl = None  # type: ignore[assignment]
+
+T = TypeVar("T")
 
 
 def read_state(path: Path) -> dict[str, Any]:
@@ -37,6 +45,37 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+@contextmanager
+def _state_lock(path: Path) -> Iterator[None]:
+    """Cross-process exclusive lock guarding read-modify-write cycles."""
+    lock_path = Path(path).with_name(Path(path).name + ".lock")
+    with open(lock_path, "w", encoding="utf-8") as f:
+        if fcntl is not None:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def update_state(path: Path, mutator: Callable[[dict[str, Any]], T]) -> T:
+    """Read-modify-write the state file under an exclusive lock.
+
+    `mutator` receives the freshly-read state dict and may modify it in
+    place; the file is rewritten only if the dict actually changed. Use this
+    instead of read_state/write_state whenever the daemon and web server (or
+    concurrent requests) might race on the same file.
+    """
+    with _state_lock(path):
+        state = read_state(path)
+        before = json.dumps(state, sort_keys=True, default=str)
+        result = mutator(state)
+        if json.dumps(state, sort_keys=True, default=str) != before:
+            write_state(path, state)
+        return result
 
 
 def get_last_action(state: dict[str, Any]) -> str | None:

@@ -21,7 +21,7 @@ from .daemon import (
 from .engine import decide_actions
 from .geocode import GeocodeError, geocode as do_geocode
 from .notifier import generate_vapid_keys
-from .state import read_state, set_indoor_temp, write_state
+from .state import read_state, set_indoor_temp, update_state
 from .weather import NWSProvider
 
 
@@ -48,8 +48,7 @@ def check(
     now = datetime.now(tz)
     st = read_state(state)
     indoor, source_name = read_indoor_temp(cfg, st)
-    lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    lat, lon = update_state(state, lambda s: resolve_coordinates(cfg, s))
     provider = NWSProvider(lat, lon)
     forecast = provider.hourly_forecast(hours=12)
     rec = decide_actions(
@@ -83,9 +82,7 @@ def forecast(
 ) -> None:
     """Print the 12-hour NWS forecast as a plain table."""
     cfg = _load(config)
-    st = read_state(state)
-    lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    lat, lon = update_state(state, lambda s: resolve_coordinates(cfg, s))
     provider = NWSProvider(lat, lon)
     hours = provider.hourly_forecast(hours=12)
     typer.echo(f"{'Time':<25} {'Temp°F':>7} {'Wind':>6} {'Gust':>6} {'Dir°':>5} {'Rain%':>6}")
@@ -133,9 +130,7 @@ def set_indoor(
     state: Path = typer.Option(DEFAULT_STATE, "--state", "-s"),
 ) -> None:
     """Record the current indoor temperature."""
-    st = read_state(state)
-    set_indoor_temp(st, temp, datetime.now())
-    write_state(state, st)
+    update_state(state, lambda st: set_indoor_temp(st, temp, datetime.now()))
     typer.echo(f"Indoor temp set to {temp:.1f}°F")
 
 

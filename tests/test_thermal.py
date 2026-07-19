@@ -94,6 +94,24 @@ def test_fit_model_recovers_synthetic_coefficients(tmp_path):
     assert model.gamma_hvac < 0          # HVAC removes heat.
 
 
+def test_fit_model_returns_none_when_singular():
+    # windows_open/hvac_active never recorded → those features are identically
+    # zero, the normal matrix is singular, and no fit exists. Must be None,
+    # not an all-zero "model".
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    rows = [
+        Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=70.0 + 0.01 * i,
+            outdoor_f=60.0,
+            wind_mph=None, rain_pct=None, action="open",
+            windows_open=None, hvac_active=None,
+        )
+        for i in range(MIN_SAMPLES + 20)
+    ]
+    assert fit_model(rows) is None
+
+
 def test_estimate_savings_scales_with_hours():
     kwh, dollars = estimate_savings(None, hours_avoided=2.0, price_per_kwh=0.20)
     assert kwh > 0
