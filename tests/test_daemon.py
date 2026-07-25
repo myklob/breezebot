@@ -80,3 +80,45 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
     assert (tmp_path / "data.sqlite").exists()
+
+
+def test_read_state_recovers_from_corrupt_file(tmp_path):
+    from nightcool.state import read_state
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{not valid json", encoding="utf-8")
+    assert read_state(state_path) == {}
+    assert not state_path.exists()
+    assert (tmp_path / "state.json.corrupt").exists()
+
+
+def test_run_once_preserves_concurrent_state_writes(tmp_path):
+    """A write landing during the poll (e.g. the web process pruning a push
+    subscription) must not be clobbered by run_once's own state write."""
+    from nightcool.state import read_state
+
+    state_path = tmp_path / "state.json"
+    cfg = _make_cfg(tmp_path)
+    st: dict = {}
+    set_indoor_temp(st, 71.0, datetime.now())
+    write_state(state_path, st)
+
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = MockWeatherProvider(_cool_forecast(fake_now))
+
+    class ConcurrentWriteNotifier:
+        def send(self, title, body):
+            mid = read_state(state_path)
+            mid["written_mid_poll"] = True
+            write_state(state_path, mid)
+
+    with patch("nightcool.daemon.datetime") as dt, \
+         patch("nightcool.daemon._build_notifier", return_value=ConcurrentWriteNotifier()):
+        dt.now.return_value = fake_now
+        dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        rec = run_once(cfg, state_path, provider=provider)
+
+    assert rec.action == "open"
+    stored = json.loads(state_path.read_text())
+    assert stored["last_action"] == "open"
+    assert stored.get("written_mid_poll") is True

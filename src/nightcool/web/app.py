@@ -183,7 +183,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +266,15 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # Count open *episodes*, not per-poll rows: the daemon logs one row
+        # every poll, so a single open night is ~32 consecutive "open" rows.
+        open_episodes = 0
+        prev_action = None
+        for o in obs:
+            if o.action == "open" and prev_action != "open":
+                open_episodes += 1
+            prev_action = o.action
+        kwh, dollars = estimate_savings(model, hours_avoided=open_episodes * 6.0)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +286,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_episodes,
         }
 
     if STATIC_DIR.exists():

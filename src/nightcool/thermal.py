@@ -129,6 +129,9 @@ def load_observations(conn: sqlite3.Connection) -> list[Observation]:
                 indoor_source=row[8],
             )
         )
+    # ts is TEXT with a UTC offset, so the SQL ORDER BY is lexicographic and
+    # misorders rows across a DST fall-back; re-sort by actual instant.
+    out.sort(key=lambda o: o.ts)
     return out
 
 

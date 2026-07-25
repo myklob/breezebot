@@ -80,3 +80,23 @@ def test_read_indoor_with_fallback_returns_provenance(tmp_path):
     val, name = read_indoor_with_fallback(src, fallback_f=71.5)
     assert val == 71.5
     assert name == "fallback"
+
+
+def test_nest_refresh_failure_raises_source_unavailable():
+    import httpx
+
+    from nightcool.sources import NestSource
+
+    class FailingClient:
+        def post(self, *a, **kw):
+            raise httpx.ConnectError("network down")
+
+    src = NestSource(
+        NestConfig(
+            project_id="p", client_id="c", client_secret="s",
+            refresh_token="r", device_id="d",
+        ),
+        client=FailingClient(),
+    )
+    with pytest.raises(SourceUnavailable):
+        src.current_temperature()

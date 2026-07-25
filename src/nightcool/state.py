@@ -19,7 +19,13 @@ def read_state(path: Path) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        # A corrupt file would otherwise wedge every poll and API request
+        # until someone hand-deletes it. Set it aside and start fresh.
+        p.replace(p.with_name(p.name + ".corrupt"))
+        return {}
 
 
 def write_state(path: Path, state: dict[str, Any]) -> None:

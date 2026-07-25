@@ -120,8 +120,12 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates without clobbering keys
+        # another process may have written since our read.
+        if "location_cache" in state:
+            st = read_state(state_path)
+            st["location_cache"] = state["location_cache"]
+            write_state(state_path, st)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +137,12 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # Re-read before writing: send() may have pruned dead push
+        # subscriptions, and the web process may have written state since
+        # the poll started. Writing the poll-start snapshot would undo both.
+        st = read_state(state_path)
+        set_last_action(st, rec.action, now)
+        write_state(state_path, st)
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

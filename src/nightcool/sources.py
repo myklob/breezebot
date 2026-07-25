@@ -121,6 +121,8 @@ class NestSource(IndoorTempSource):
             token = r.json()["access_token"]
             self._access_token = token
             return token
+        except (httpx.HTTPError, KeyError, ValueError) as e:
+            raise SourceUnavailable(f"nest token refresh failed: {e}") from e
         finally:
             if self._client is None:
                 client.close()

@@ -166,3 +166,58 @@ def test_static_index_served(client):
     r = c.get("/")
     assert r.status_code == 200
     assert "NightCool" in r.text
+
+
+def test_post_schedule_day_home_false_preserves_leave_at(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+schedule:
+  mon: {target_f: 66, leave_at: "07:30"}
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        r = c.post("/api/schedule/mon", json={"home_all_day": False})
+        assert r.status_code == 200
+    assert cfg.schedule.mon.leave_at is not None
+    assert cfg.schedule.mon.leave_at.isoformat().startswith("07:30")
+
+
+def test_savings_counts_open_episodes_not_rows(client):
+    from nightcool.thermal import Observation, connect, log_observation
+
+    c, _state, cfg, _tmp = client
+    start = datetime(2024, 6, 14, 22, 0, tzinfo=timezone.utc)
+    conn = connect(Path(cfg.web.data_log_path))
+    try:
+        for i in range(120):
+            t = start + timedelta(minutes=15 * i)
+            in_open_block = (8 <= i < 40) or (88 <= i < 120)
+            log_observation(conn, Observation(
+                ts=t,
+                indoor_f=72.0 - (0.05 * i),
+                outdoor_f=60.0,
+                wind_mph=5.0,
+                rain_pct=0.0,
+                action="open" if in_open_block else "no_change",
+                windows_open=in_open_block,
+                hvac_active=False,
+                indoor_source="manual",
+            ))
+    finally:
+        conn.close()
+
+    r = c.get("/api/savings")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["model"] is not None
+    # 64 "open" rows, but only two distinct open episodes.
+    assert data["open_events_counted"] == 2
