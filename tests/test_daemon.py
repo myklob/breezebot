@@ -20,7 +20,7 @@ from nightcool.config import (
 )
 from nightcool.daemon import run_once
 from nightcool.engine import HourlyForecast
-from nightcool.state import set_indoor_temp, write_state
+from nightcool.state import read_state, set_indoor_temp, write_state
 from nightcool.weather import MockWeatherProvider
 
 
@@ -80,3 +80,40 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
     assert (tmp_path / "data.sqlite").exists()
+
+
+class _ConcurrentWriteProvider(MockWeatherProvider):
+    """Simulates the web server writing state.json mid-cycle: the daemon has
+    already read its snapshot when the forecast fetch happens."""
+
+    def __init__(self, hours: list[HourlyForecast], state_path: Path) -> None:
+        super().__init__(hours)
+        self._state_path = state_path
+
+    def hourly_forecast(self, hours: int = 12) -> list[HourlyForecast]:
+        st = read_state(self._state_path)
+        set_indoor_temp(st, 68.5, datetime.now())
+        write_state(self._state_path, st)
+        return super().hourly_forecast(hours)
+
+
+def test_run_once_preserves_concurrent_state_writes(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    cfg = _make_cfg(tmp_path)
+    st: dict = {}
+    set_indoor_temp(st, 71.0, datetime.now())
+    write_state(state_path, st)
+
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = _ConcurrentWriteProvider(_cool_forecast(fake_now), state_path)
+
+    with patch("nightcool.daemon.datetime") as dt:
+        dt.now.return_value = fake_now
+        dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+        rec = run_once(cfg, state_path, provider=provider)
+
+    assert rec.action == "open"
+    stored = json.loads(state_path.read_text())
+    assert stored["last_action"] == "open"
+    # The mid-cycle indoor-temp update must survive the daemon's write.
+    assert stored["indoor_temp_f"] == 68.5

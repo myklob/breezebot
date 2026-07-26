@@ -104,6 +104,18 @@ def _make_provider(cfg: AppConfig, state: dict[str, Any]) -> WeatherProvider:
     return NWSProvider(lat, lon)
 
 
+def _merge_state_keys(state_path: Path, state: dict[str, Any], keys: tuple[str, ...]) -> None:
+    """Persist only `keys` from this cycle's snapshot, merged over a fresh
+    read of the file. The web server writes the same file concurrently
+    (indoor temp, push subscriptions); writing back the whole snapshot taken
+    at cycle start would silently revert anything it wrote since."""
+    fresh = read_state(state_path)
+    for key in keys:
+        if key in state:
+            fresh[key] = state[key]
+    write_state(state_path, fresh)
+
+
 def run_once(
     cfg: AppConfig,
     state_path: Path,
@@ -115,13 +127,15 @@ def run_once(
     state = read_state(state_path)
     indoor, source_name = read_indoor_temp(cfg, state)
     if provider is None:
+        cached = state.get("location_cache")
         try:
             provider = _make_provider(cfg, state)
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
         # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        if state.get("location_cache") != cached:
+            _merge_state_keys(state_path, state, ("location_cache",))
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -134,7 +148,7 @@ def run_once(
         title, body = format_notification(rec)
         notifier.send(title, body)
         set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        _merge_state_keys(state_path, state, ("last_action", "last_action_time"))
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

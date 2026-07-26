@@ -221,6 +221,32 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
     )
 
 
+def open_window_stats(obs: Iterable[Observation]) -> tuple[float, int]:
+    """Return (open_hours, open_events) from the poll log.
+
+    Each poll row with action='open' is one 15-minute sample of an ongoing
+    opportunity, not a fresh multi-hour event. Hours are the summed gaps
+    between consecutive open samples; a gap over an hour (missed polls,
+    daemon restart) starts a new event.
+    """
+    hours = 0.0
+    events = 0
+    prev: Observation | None = None
+    for cur in obs:
+        if cur.action == "open":
+            gap_hr = (
+                (cur.ts - prev.ts).total_seconds() / 3600.0
+                if prev is not None and prev.action == "open"
+                else None
+            )
+            if gap_hr is not None and 0.0 < gap_hr <= 1.0:
+                hours += gap_hr
+            else:
+                events += 1
+        prev = cur
+    return hours, events
+
+
 # ---- Savings ----
 
 # Typical residential split-system AC: ~3.5 kW input for 12k BTU/h cooling.

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, time
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ from ..state import (
     set_indoor_temp,
     write_state,
 )
-from ..thermal import connect, estimate_savings, fit_model, load_observations
+from ..thermal import connect, estimate_savings, fit_model, load_observations, open_window_stats
 from ..weather import NWSProvider, WeatherProvider
 
 
@@ -79,13 +80,19 @@ def create_app(
     provider: WeatherProvider | None = None,
 ) -> FastAPI:
     app = FastAPI(title="NightCool", version="0.3.0")
+    # Sync endpoints run in a threadpool; serialize state read-modify-writes
+    # so concurrent requests can't lose each other's updates.
+    state_lock = threading.Lock()
 
     def get_provider() -> WeatherProvider:
         if provider is not None:
             return provider
-        state = read_state(state_path)
-        lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        with state_lock:
+            state = read_state(state_path)
+            cached = state.get("location_cache")
+            lat, lon = resolve_coordinates(cfg, state)
+            if state.get("location_cache") != cached:
+                write_state(state_path, state)
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -203,9 +210,10 @@ def create_app(
 
     @app.post("/api/indoor-temp")
     def post_indoor_temp(payload: IndoorTempIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        set_indoor_temp(st, payload.temperature_f, now_local())
-        write_state(state_path, st)
+        with state_lock:
+            st = read_state(state_path)
+            set_indoor_temp(st, payload.temperature_f, now_local())
+            write_state(state_path, st)
         return {"ok": True, "indoor_f": payload.temperature_f}
 
     @app.post("/api/geocode")
@@ -220,9 +228,10 @@ def create_app(
         if config_path is not None:
             _save_config()
         # Clear the cache so the next poll re-resolves.
-        st = read_state(state_path)
-        st.pop("location_cache", None)
-        write_state(state_path, st)
+        with state_lock:
+            st = read_state(state_path)
+            st.pop("location_cache", None)
+            write_state(state_path, st)
         return {
             "ok": True,
             "matched_address": result.matched_address,
@@ -239,18 +248,20 @@ def create_app(
 
     @app.post("/api/subscribe")
     def post_subscribe(sub: SubscriptionIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        added = add_subscription(st, sub.model_dump(exclude_none=True))
-        if added:
-            write_state(state_path, st)
+        with state_lock:
+            st = read_state(state_path)
+            added = add_subscription(st, sub.model_dump(exclude_none=True))
+            if added:
+                write_state(state_path, st)
         return {"ok": True, "added": added, "total": len(list_subscriptions(st))}
 
     @app.post("/api/unsubscribe")
     def post_unsubscribe(payload: UnsubscribeIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        removed = remove_subscription(st, payload.endpoint)
-        if removed:
-            write_state(state_path, st)
+        with state_lock:
+            st = read_state(state_path)
+            removed = remove_subscription(st, payload.endpoint)
+            if removed:
+                write_state(state_path, st)
         return {"ok": True, "removed": removed}
 
     @app.get("/api/savings")
@@ -266,8 +277,8 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        open_hours, open_events = open_window_stats(obs)
+        kwh, dollars = estimate_savings(model, hours_avoided=open_hours)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +290,8 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_events,
+            "open_hours_counted": open_hours,
         }
 
     if STATIC_DIR.exists():

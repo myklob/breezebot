@@ -13,7 +13,17 @@ from nightcool.thermal import (
     fit_model,
     load_observations,
     log_observation,
+    open_window_stats,
 )
+
+
+def _obs(minutes: int, action: str) -> Observation:
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    return Observation(
+        ts=base + timedelta(minutes=minutes),
+        indoor_f=70.0, outdoor_f=60.0, wind_mph=0, rain_pct=0,
+        action=action, windows_open=None, hvac_active=None,
+    )
 
 
 def test_log_and_load_roundtrip(tmp_path):
@@ -92,6 +102,29 @@ def test_fit_model_recovers_synthetic_coefficients(tmp_path):
     # Coefficients should be in the right ballpark.
     assert model.alpha_ventilation > 0  # ventilation cools when outdoor < indoor.
     assert model.gamma_hvac < 0          # HVAC removes heat.
+
+
+def test_open_window_stats_counts_spans_not_rows():
+    obs = [
+        _obs(0, "no_change"),
+        _obs(15, "open"), _obs(30, "open"), _obs(45, "open"),
+        _obs(60, "close"), _obs(75, "no_change"),
+        _obs(90, "open"), _obs(105, "open"),
+    ]
+    hours, events = open_window_stats(obs)
+    assert events == 2
+    assert math.isclose(hours, 0.75)  # 30 min in the first span + 15 in the second.
+
+
+def test_open_window_stats_breaks_event_on_long_gap():
+    obs = [_obs(0, "open"), _obs(15, "open"), _obs(300, "open")]
+    hours, events = open_window_stats(obs)
+    assert events == 2
+    assert math.isclose(hours, 0.25)
+
+
+def test_open_window_stats_empty():
+    assert open_window_stats([]) == (0.0, 0)
 
 
 def test_estimate_savings_scales_with_hours():
