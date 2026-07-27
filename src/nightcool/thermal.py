@@ -132,43 +132,55 @@ def load_observations(conn: sqlite3.Connection) -> list[Observation]:
     return out
 
 
-def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple[tuple[float, float, float], float]:
+def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple[tuple[float, float, float], float] | None:
     """Solve a 3-feature OLS regression by hand, no numpy dependency.
 
     rows is a list of (dT_dt, vent_driver, solar_driver, hvac_indicator).
-    Returns ((alpha, beta, gamma), r_squared).
+    Returns ((alpha, beta, gamma), r_squared), or None when the system is
+    singular. Feature columns that are identically zero (e.g. the windows were
+    never open, or HVAC state is unknown) are excluded from the solve and get
+    a 0.0 coefficient, rather than poisoning the whole fit.
     """
     n = len(rows)
-    # Build X^T X (3x3) and X^T y (3,) by accumulation.
-    a = [[0.0] * 3 for _ in range(3)]
-    b = [0.0, 0.0, 0.0]
+    active = [i for i in range(3) if any(abs(r[i + 1]) > 1e-12 for r in rows)]
+    if not active:
+        return None
+    m = len(active)
+
+    # Build X^T X (m x m) and X^T y (m,) over the active columns.
+    a = [[0.0] * m for _ in range(m)]
+    b = [0.0] * m
     y_mean = sum(r[0] for r in rows) / n
     tss = 0.0
-    for dy, x1, x2, x3 in rows:
-        xs = (x1, x2, x3)
-        for i in range(3):
+    for row in rows:
+        dy = row[0]
+        xs = [row[i + 1] for i in active]
+        for i in range(m):
             b[i] += xs[i] * dy
-            for j in range(3):
+            for j in range(m):
                 a[i][j] += xs[i] * xs[j]
         tss += (dy - y_mean) ** 2
 
-    # Solve 3x3 system via Gaussian elimination.
-    for k in range(3):
+    # Solve the m x m system via Gaussian elimination.
+    for k in range(m):
         # Partial pivot for numerical stability.
-        pivot = max(range(k, 3), key=lambda i: abs(a[i][k]))
+        pivot = max(range(k, m), key=lambda i: abs(a[i][k]))
         if pivot != k:
             a[k], a[pivot] = a[pivot], a[k]
             b[k], b[pivot] = b[pivot], b[k]
         if abs(a[k][k]) < 1e-12:
-            return ((0.0, 0.0, 0.0), 0.0)
-        for i in range(k + 1, 3):
+            return None
+        for i in range(k + 1, m):
             f = a[i][k] / a[k][k]
-            for j in range(k, 3):
+            for j in range(k, m):
                 a[i][j] -= f * a[k][j]
             b[i] -= f * b[k]
+    reduced = [0.0] * m
+    for i in range(m - 1, -1, -1):
+        reduced[i] = (b[i] - sum(a[i][j] * reduced[j] for j in range(i + 1, m))) / a[i][i]
     coefs = [0.0, 0.0, 0.0]
-    for i in range(2, -1, -1):
-        coefs[i] = (b[i] - sum(a[i][j] * coefs[j] for j in range(i + 1, 3))) / a[i][i]
+    for idx, c in zip(active, reduced):
+        coefs[idx] = c
     alpha, beta, gamma = coefs
 
     rss = 0.0
@@ -210,7 +222,10 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
 
     if len(rows) < MIN_SAMPLES // 2:
         return None
-    (alpha, beta, gamma), r2 = _solve_least_squares(rows)
+    solved = _solve_least_squares(rows)
+    if solved is None:
+        return None
+    (alpha, beta, gamma), r2 = solved
     return ThermalModel(
         alpha_ventilation=alpha,
         beta_solar=beta,

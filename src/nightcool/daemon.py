@@ -129,17 +129,24 @@ def run_once(
         comfort_floor=cfg.comfort_floor, warnings=cfg.warnings,
     )
     last = get_last_action(state)
-    if should_notify(rec, last, now, schedule=cfg.schedule, prefs=cfg.prefs):
+    notified = should_notify(rec, last, now, schedule=cfg.schedule, prefs=cfg.prefs)
+    if notified:
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
+        # Re-read before writing: send() prunes dead subscriptions through its
+        # own read-modify-write, and the web process may have written state
+        # while we were doing network I/O. Writing the dict read at the top of
+        # this cycle would silently undo both.
+        state = read_state(state_path)
         set_last_action(state, rec.action, now)
         write_state(state_path, state)
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)
 
-    _log_observation(cfg, now, indoor, source_name, forecast, rec.action)
+    effective_action = rec.action if notified else last
+    _log_observation(cfg, now, indoor, source_name, forecast, rec.action, effective_action == "open")
     return rec
 
 
@@ -150,6 +157,7 @@ def _log_observation(
     source_name: str,
     forecast: list,
     action: str,
+    windows_open: bool,
 ) -> None:
     """Append the current poll to the thermal-model data store. Soft-fails."""
     try:
@@ -167,7 +175,9 @@ def _log_observation(
                     wind_mph=cur.wind_speed_mph if cur else None,
                     rain_pct=cur.rain_chance_pct if cur else None,
                     action=action,
-                    windows_open=None,
+                    # Best-effort presumption from the advice stream: windows
+                    # count as open from an OPEN recommendation until a CLOSE.
+                    windows_open=windows_open,
                     hvac_active=None,
                     indoor_source=source_name,
                 ),

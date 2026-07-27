@@ -125,6 +125,69 @@ windows: [{id: w, name: W, exposure: exposed, security: secure}]
     assert raw["schedule"]["mon"]["leave_at"].startswith("08:00")
 
 
+def test_savings_counts_open_events_not_poll_rows(client):
+    c, state, cfg, tmp_path = client
+    import math
+    import random
+    from nightcool.thermal import MIN_SAMPLES, Observation, connect, log_observation
+
+    random.seed(0)
+    conn = connect(tmp_path / "data.sqlite")
+    base = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    indoor = 72.0
+    n = MIN_SAMPLES + 40
+    open_runs = 0
+    prev_open = False
+    for i in range(n):
+        outdoor = 60.0 + 8.0 * math.sin(i / 6.0)
+        windows_open = (i % 8) < 4
+        if windows_open and not prev_open:
+            open_runs += 1
+        prev_open = windows_open
+        vent = (1.0 if windows_open else 0.0) * (outdoor - indoor)
+        solar = 50.0 - outdoor
+        indoor += (1.6 * vent + 0.1 * solar) * 0.25 + random.gauss(0, 0.05)
+        log_observation(conn, Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=indoor, outdoor_f=outdoor, wind_mph=0, rain_pct=0,
+            action="open" if windows_open else "no_change",
+            windows_open=windows_open, hvac_active=None,
+        ))
+    conn.close()
+
+    r = c.get("/api/savings")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["model"] is not None
+    assert data["open_events_counted"] == open_runs
+    total_open_rows = sum(1 for i in range(n) if (i % 8) < 4)
+    assert data["open_events_counted"] < total_open_rows
+
+
+def test_home_all_day_toggle_preserves_leave_at(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+schedule:
+  mon: {target_f: 65, leave_at: "07:30"}
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        assert c.post("/api/schedule/mon", json={"home_all_day": True}).status_code == 200
+        assert c.post("/api/schedule/mon", json={"home_all_day": False}).status_code == 200
+    assert cfg.schedule.mon.home_all_day is False
+    assert cfg.schedule.mon.leave_at is not None
+    assert cfg.schedule.mon.leave_at.strftime("%H:%M") == "07:30"
+
+
 def test_post_geocode_resolves_and_persists(client):
     c, state, cfg, _ = client
     fake = GeocodeResult(latitude=39.74, longitude=-104.99, matched_address="Denver, CO")

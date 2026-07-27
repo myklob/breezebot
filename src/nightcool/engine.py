@@ -27,6 +27,9 @@ from .config import (
 OPEN_LOOKAHEAD_HOURS = 2
 # Opening to air that's barely under the day's target is wasted effort.
 USEFUL_DELTA_OVER_TARGET_F = 5.0
+# Covered windows ("eave or awning; light rain is fine") get at least this
+# much rain tolerance even when max_rain_chance_pct is configured lower.
+COVERED_RAIN_TOLERANCE_PCT = 60.0
 # Default first-order thermal time constant in 1/hour when windows are open.
 # Empirically reasonable for a typical house with cross-ventilation; replace
 # with a fitted value from `thermal.fit_model` once data is available.
@@ -93,7 +96,10 @@ def _window_eligible(window: Window, hour: HourlyForecast, warnings: WarningPref
     if warnings.warn_on_rain:
         if window.exposure == Exposure.EXPOSED and hour.rain_chance_pct > warnings.max_rain_chance_pct:
             return False
-        if window.exposure == Exposure.COVERED and hour.rain_chance_pct > 60.0:
+        # Covered windows tolerate at least light rain; never hold them to a
+        # stricter threshold than exposed ones.
+        covered_max = max(COVERED_RAIN_TOLERANCE_PCT, warnings.max_rain_chance_pct)
+        if window.exposure == Exposure.COVERED and hour.rain_chance_pct > covered_max:
             return False
     if warnings.warn_on_gusts and window.security == Security.UNSECURE:
         if hour.wind_gust_mph > warnings.max_gust_mph:
@@ -120,7 +126,6 @@ def _hour_passes_open_criteria(
         hour.temperature_f <= open_threshold
         and hour.temperature_f >= prefs.min_tolerable_outdoor_f
         and hour.temperature_f <= useful_max
-        and not _in_bad_sector(hour.wind_direction_deg, warnings.bad_wind_sector_deg)
     )
 
 
@@ -226,7 +231,7 @@ def _morning_leave_after(now_local: datetime, schedule: DailySchedule, prefs: Pr
     for offset in (0, 1):
         cand_date = (now_local + timedelta(days=offset)).date()
         day = schedule.for_weekday(cand_date.weekday())
-        leave_at = day.leave_at or prefs.quiet_hours_end
+        leave_at = (day.leave_at if not day.home_all_day else None) or prefs.quiet_hours_end
         cand = now_local.replace(
             year=cand_date.year, month=cand_date.month, day=cand_date.day,
             hour=leave_at.hour, minute=leave_at.minute, second=0, microsecond=0,

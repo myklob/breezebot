@@ -94,6 +94,51 @@ def test_fit_model_recovers_synthetic_coefficients(tmp_path):
     assert model.gamma_hvac < 0          # HVAC removes heat.
 
 
+def test_fit_model_returns_none_when_all_features_are_dead(tmp_path):
+    # Rows shaped like a logger that never records open windows or HVAC and
+    # whose solar proxy happens to vanish: no usable signal -> None, not a
+    # bogus all-zero "fitted" model.
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    rows = [
+        Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=72.0,
+            outdoor_f=50.0,  # solar proxy (50 - outdoor) is identically zero.
+            wind_mph=0, rain_pct=0, action="no_change",
+            windows_open=None, hvac_active=None,
+        )
+        for i in range(MIN_SAMPLES + 40)
+    ]
+    assert fit_model(rows) is None
+
+
+def test_fit_model_tolerates_unknown_hvac_column():
+    # hvac_active is never recorded (None throughout) but ventilation and
+    # solar still carry signal; the dead column must not zero out the fit.
+    random.seed(1)
+    rows: list[Observation] = []
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    indoor = 72.0
+    for i in range(MIN_SAMPLES + 40):
+        outdoor = 60.0 + 8.0 * math.sin(i / 6.0)
+        windows_open = (i % 8) < 4
+        vent = (1.0 if windows_open else 0.0) * (outdoor - indoor)
+        solar = 50.0 - outdoor
+        dT = (1.6 * vent + 0.1 * solar) * 0.25
+        indoor += dT + random.gauss(0, 0.05)
+        rows.append(Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=indoor,
+            outdoor_f=outdoor,
+            wind_mph=0, rain_pct=0, action="open" if windows_open else "no_change",
+            windows_open=windows_open, hvac_active=None,
+        ))
+    model = fit_model(rows)
+    assert model is not None
+    assert model.alpha_ventilation > 0
+    assert model.gamma_hvac == 0.0
+
+
 def test_estimate_savings_scales_with_hours():
     kwh, dollars = estimate_savings(None, hours_avoided=2.0, price_per_kwh=0.20)
     assert kwh > 0

@@ -7,6 +7,7 @@ lives in the working directory.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime
@@ -14,12 +15,25 @@ from pathlib import Path
 from typing import Any
 
 
+logger = logging.getLogger("nightcool.state")
+
+
 def read_state(path: Path) -> dict[str, Any]:
-    """Load state from disk; return empty dict if file is missing."""
+    """Load state from disk; return empty dict if the file is missing,
+    corrupt, or not a JSON object. A truncated or hand-mangled state file
+    must not crash-loop the daemon."""
     p = Path(path)
     if not p.exists():
         return {}
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        logger.warning("state file %s is corrupt (%s); starting fresh", p, e)
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("state file %s is not a JSON object; starting fresh", p)
+        return {}
+    return data
 
 
 def write_state(path: Path, state: dict[str, Any]) -> None:

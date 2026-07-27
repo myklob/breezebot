@@ -134,7 +134,7 @@ def set_indoor(
 ) -> None:
     """Record the current indoor temperature."""
     st = read_state(state)
-    set_indoor_temp(st, temp, datetime.now())
+    set_indoor_temp(st, temp, datetime.now().astimezone())
     write_state(state, st)
     typer.echo(f"Indoor temp set to {temp:.1f}°F")
 
@@ -184,7 +184,8 @@ def geocode(
     try:
         result = do_geocode(address)
     except GeocodeError as e:
-        raise typer.Exit(f"Geocode failed: {e}")
+        typer.echo(f"Geocode failed: {e}", err=True)
+        raise typer.Exit(1)
     typer.echo(f"Matched: {result.matched_address}")
     typer.echo(f"Latitude:  {result.latitude}")
     typer.echo(f"Longitude: {result.longitude}")

@@ -58,7 +58,7 @@ def _every_day(target_f=65.0):
 
 def _decide(indoor, forecast, windows, *, target_f=65.0, hysteresis=2.5,
             bad_sector=None, warn_rain=False, warn_gusts=False, floor=10.0,
-            max_dew_point_f=None, now=BASE):
+            max_dew_point_f=None, max_rain=20.0, now=BASE):
     return decide_actions(
         indoor, forecast, windows, now,
         schedule=_every_day(target_f),
@@ -69,6 +69,7 @@ def _decide(indoor, forecast, windows, *, target_f=65.0, hysteresis=2.5,
             warn_on_rain=warn_rain,
             warn_on_gusts=warn_gusts,
             max_dew_point_f=max_dew_point_f,
+            max_rain_chance_pct=max_rain,
         ),
     )
 
@@ -134,8 +135,29 @@ def test_bad_wind_sector_blocks_only_facing_windows_when_wind_is_outside_sector(
 
 def test_bad_wind_direction_blocks_opening_entirely():
     forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(60.0, 120.0))
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(60.0, 120.0))
     assert rec.action != "open"
+
+
+def test_bad_wind_in_sector_skips_only_flagged_windows():
+    forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
+    windows = [
+        make_window(id="east_facing", on_bad=True),
+        make_window(id="west_facing", on_bad=False),
+    ]
+    rec = _decide(71.0, forecast, windows, bad_sector=(60.0, 120.0))
+    assert rec.action == "open"
+    assert rec.eligible_windows == ["west_facing"]
+
+
+def test_covered_window_never_stricter_than_exposed_on_rain():
+    forecast = [make_hour(i, 62.0, rain=65.0) for i in range(12)]
+    windows = [
+        make_window(id="exposed", exposure=Exposure.EXPOSED),
+        make_window(id="covered", exposure=Exposure.COVERED),
+    ]
+    rec = _decide(71.0, forecast, windows, warn_rain=True, max_rain=70.0)
+    assert set(rec.eligible_windows) == {"exposed", "covered"}
 
 
 def test_unsecure_window_blocked_by_gusts_when_warning_on():
@@ -172,7 +194,7 @@ def test_close_signal_when_outdoor_warm_enough():
 
 def test_bad_sector_wraps_around_north():
     forecast = [make_hour(i, 62.0, wind_dir=5.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(350.0, 10.0))
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(350.0, 10.0))
     assert rec.action != "open"
 
 
