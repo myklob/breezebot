@@ -184,7 +184,8 @@ def geocode(
     try:
         result = do_geocode(address)
     except GeocodeError as e:
-        raise typer.Exit(f"Geocode failed: {e}")
+        typer.echo(f"Geocode failed: {e}", err=True)
+        raise typer.Exit(1) from e
     typer.echo(f"Matched: {result.matched_address}")
     typer.echo(f"Latitude:  {result.latitude}")
     typer.echo(f"Longitude: {result.longitude}")
@@ -251,7 +252,7 @@ def web_push_keys() -> None:
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
     typer.echo(f"    vapid_public_key: \"{public}\"")
-    typer.echo(f"    vapid_private_key: |")
+    typer.echo("    vapid_private_key: |")
     for line in private.splitlines():
         typer.echo(f"      {line}")
     typer.echo("    vapid_subject: \"mailto:you@example.com\"")

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -195,7 +195,7 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
         return None
 
     rows: list[tuple[float, float, float, float]] = []
-    for prev, cur in zip(pts, pts[1:]):
+    for prev, cur in zip(pts, pts[1:], strict=False):
         if cur.outdoor_f is None or prev.outdoor_f is None:
             continue
         dt_hours = (cur.ts - prev.ts).total_seconds() / 3600.0

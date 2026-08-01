@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
 from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
-from ..engine import decide_actions, summarize_missed_opportunity
+from ..engine import decide_actions
 from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
@@ -190,7 +190,7 @@ def create_app(
             try:
                 new_leave = time.fromisoformat(payload.leave_at)
             except ValueError:
-                raise HTTPException(400, f"invalid leave_at {payload.leave_at!r}; expected HH:MM")
+                raise HTTPException(400, f"invalid leave_at {payload.leave_at!r}; expected HH:MM") from None
         if new_home:
             new_leave = None
         setattr(cfg.schedule, day, DaySchedule(
@@ -213,7 +213,7 @@ def create_app(
         try:
             result = do_geocode(payload.address)
         except GeocodeError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, str(e)) from e
         cfg.location.address = result.matched_address
         cfg.location.latitude = result.latitude
         cfg.location.longitude = result.longitude
