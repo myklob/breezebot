@@ -7,7 +7,6 @@ from nightcool.config import (
     BLESensorConfig,
     IndoorSourceKind,
     IndoorTempConfig,
-    NestConfig,
 )
 from nightcool.sources import (
     BLESource,
