@@ -21,6 +21,12 @@ class GeocodeError(RuntimeError):
     """The address could not be resolved."""
 
 
+class GeocodeUnavailable(GeocodeError):
+    """The geocoding service itself failed (network error or 5xx) — the
+    address may be fine. Callers can surface this as an upstream outage
+    rather than blaming the user's input."""
+
+
 @dataclass(frozen=True)
 class GeocodeResult:
     latitude: float
@@ -46,8 +52,12 @@ def geocode(address: str, *, client: httpx.Client | None = None) -> GeocodeResul
         r = c.get(CENSUS_URL, params=params)
         r.raise_for_status()
         data = r.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code < 500:
+            raise GeocodeError(f"Census Geocoder request failed: {e}") from e
+        raise GeocodeUnavailable(f"Census Geocoder unavailable: {e}") from e
     except httpx.HTTPError as e:
-        raise GeocodeError(f"Census Geocoder request failed: {e}") from e
+        raise GeocodeUnavailable(f"Census Geocoder unreachable: {e}") from e
     finally:
         if own:
             c.close()

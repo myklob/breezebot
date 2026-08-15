@@ -166,3 +166,66 @@ def test_static_index_served(client):
     r = c.get("/")
     assert r.status_code == 200
     assert "NightCool" in r.text
+
+
+def test_post_schedule_day_home_all_day_false_preserves_leave_at(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+schedule:
+  mon: {target_f: 65, leave_at: "07:30"}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        r = c.post("/api/schedule/mon", json={"home_all_day": False, "target_f": 66.0})
+        assert r.status_code == 200
+        sched = c.get("/api/schedule").json()
+    assert sched["mon"]["leave_at"].startswith("07:30")
+    import yaml
+    raw = yaml.safe_load(config_path.read_text())
+    assert raw["schedule"]["mon"]["leave_at"].startswith("07:30")
+    assert raw["schedule"]["mon"]["target_f"] == 66.0
+
+
+def test_savings_counts_open_hours_not_rows(client):
+    from nightcool.thermal import Observation, ThermalModel
+
+    c, state, cfg, tmp_path = client
+    Path(cfg.web.data_log_path).touch()
+    start = datetime(2024, 6, 15, 0, 0, tzinfo=timezone.utc)
+    # 8 consecutive "open" polls at 15-minute spacing, then two "close" polls:
+    # one open event, 2.0 hours with windows open — not 8 events x 6 h.
+    obs = [
+        Observation(
+            ts=start + timedelta(minutes=15 * i),
+            indoor_f=70.0,
+            outdoor_f=60.0,
+            wind_mph=0.0,
+            rain_pct=0.0,
+            action="open" if i < 8 else "close",
+            windows_open=None,
+            hvac_active=None,
+            indoor_source="manual",
+        )
+        for i in range(10)
+    ]
+    dummy = ThermalModel(
+        alpha_ventilation=0.5, beta_solar=0.0, gamma_hvac=0.0,
+        sample_count=10, duration_hours=2.5, r_squared=0.9,
+    )
+    with patch("nightcool.web.app.load_observations", return_value=obs), \
+         patch("nightcool.web.app.fit_model", return_value=dummy):
+        r = c.get("/api/savings")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["open_events_counted"] == 1
+    assert body["hours_open"] == pytest.approx(2.0)
+    assert body["kwh_saved"] == pytest.approx(3.5 * 2.0)

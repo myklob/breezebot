@@ -9,6 +9,7 @@ from datetime import time
 from enum import Enum
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -44,6 +45,15 @@ class Location(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     timezone: str = "America/Denver"
+
+    @field_validator("timezone")
+    @classmethod
+    def _check_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except Exception as e:
+            raise ValueError(f"unknown IANA timezone {v!r}") from e
+        return v
 
     @model_validator(mode="after")
     def _require_some_location(self) -> "Location":

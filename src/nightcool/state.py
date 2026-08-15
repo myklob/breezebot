@@ -11,7 +11,14 @@ import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+try:
+    import fcntl
+except ImportError:  # Windows: no flock; fall back to an unlocked read-modify-write.
+    fcntl = None  # type: ignore[assignment]
+
+T = TypeVar("T")
 
 
 def read_state(path: Path) -> dict[str, Any]:
@@ -37,6 +44,33 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def mutate_state(path: Path, mutate: Callable[[dict[str, Any]], T]) -> T:
+    """Read-modify-write the state file under an exclusive lock.
+
+    The daemon and the web server run in separate processes and both write
+    this file. Holding a snapshot across slow work (HTTP calls) and then
+    writing it back silently discards the other process's updates — so all
+    writers that build on existing state must go through here: the file is
+    re-read immediately before writing, with an flock held across the
+    read+write where the platform supports it.
+
+    Returns whatever `mutate` returns.
+    """
+    p = Path(path)
+    lock_path = p.with_name(p.name + ".lock")
+    with open(lock_path, "w", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            state = read_state(p)
+            result = mutate(state)
+            write_state(p, state)
+            return result
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 def get_last_action(state: dict[str, Any]) -> str | None:

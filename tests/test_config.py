@@ -132,3 +132,15 @@ windows:
     assert cfg.prefs.hysteresis_f == 2.5
     assert cfg.warnings.warn_on_rain is False
     assert cfg.notifications.service == "console"
+
+
+def test_invalid_timezone_rejected(tmp_path):
+    bad = """
+location: {address: "x", timezone: Mars/Olympus}
+windows:
+  - {id: w, name: w, exposure: exposed, security: secure}
+"""
+    p = tmp_path / "c.yaml"
+    p.write_text(bad)
+    with pytest.raises(Exception, match="timezone"):
+        load_config(p)

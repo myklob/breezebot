@@ -21,7 +21,7 @@ from .daemon import (
 from .engine import decide_actions
 from .geocode import GeocodeError, geocode as do_geocode
 from .notifier import generate_vapid_keys
-from .state import read_state, set_indoor_temp, write_state
+from .state import mutate_state, read_state, set_indoor_temp
 from .weather import NWSProvider
 
 
@@ -37,6 +37,14 @@ def _load(path: Path) -> AppConfig:
     return load_config(path)
 
 
+def _persist_location_cache(state_path: Path, snapshot: dict) -> None:
+    """Merge a freshly-geocoded location cache into the state file without
+    clobbering keys other processes may have written since our read."""
+    cache = snapshot.get("location_cache")
+    if cache:
+        mutate_state(state_path, lambda s: s.update(location_cache=cache))
+
+
 @app.command()
 def check(
     config: Path = typer.Option(DEFAULT_CONFIG, "--config", "-c"),
@@ -49,7 +57,7 @@ def check(
     st = read_state(state)
     indoor, source_name = read_indoor_temp(cfg, st)
     lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    _persist_location_cache(state, st)
     provider = NWSProvider(lat, lon)
     forecast = provider.hourly_forecast(hours=12)
     rec = decide_actions(
@@ -85,7 +93,7 @@ def forecast(
     cfg = _load(config)
     st = read_state(state)
     lat, lon = resolve_coordinates(cfg, st)
-    write_state(state, st)
+    _persist_location_cache(state, st)
     provider = NWSProvider(lat, lon)
     hours = provider.hourly_forecast(hours=12)
     typer.echo(f"{'Time':<25} {'Temp°F':>7} {'Wind':>6} {'Gust':>6} {'Dir°':>5} {'Rain%':>6}")
@@ -133,9 +141,7 @@ def set_indoor(
     state: Path = typer.Option(DEFAULT_STATE, "--state", "-s"),
 ) -> None:
     """Record the current indoor temperature."""
-    st = read_state(state)
-    set_indoor_temp(st, temp, datetime.now())
-    write_state(state, st)
+    mutate_state(state, lambda s: set_indoor_temp(s, temp, datetime.now()))
     typer.echo(f"Indoor temp set to {temp:.1f}°F")
 
 

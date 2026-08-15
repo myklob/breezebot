@@ -22,10 +22,10 @@ from .state import (
     get_indoor_temp_or_none,
     get_last_action,
     list_subscriptions,
+    mutate_state,
     read_state,
     remove_subscription,
     set_last_action,
-    write_state,
 )
 from .thermal import Observation, connect, log_observation
 from .weather import NWSProvider, WeatherProvider
@@ -87,9 +87,7 @@ def _build_notifier(cfg: AppConfig, state_path: Path):
         return list_subscriptions(read_state(state_path))
 
     def pruner(endpoint: str) -> None:
-        st = read_state(state_path)
-        if remove_subscription(st, endpoint):
-            write_state(state_path, st)
+        mutate_state(state_path, lambda s: remove_subscription(s, endpoint))
 
     return make_notifier(
         cfg.notifications,
@@ -120,8 +118,11 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates. Merge just this key so a web
+        # server writing state.json concurrently doesn't lose its updates.
+        cache = state.get("location_cache")
+        if cache:
+            mutate_state(state_path, lambda s: s.update(location_cache=cache))
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +134,7 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        mutate_state(state_path, lambda s: set_last_action(s, rec.action, now))
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

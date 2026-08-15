@@ -4,7 +4,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from nightcool.geocode import GeocodeError, geocode
+from nightcool.geocode import GeocodeError, GeocodeUnavailable, geocode
 
 
 def test_geocode_parses_first_match():
@@ -35,9 +35,25 @@ def test_geocode_no_match_raises():
         geocode("nowhere at all", client=client)
 
 
-def test_geocode_http_error_raises():
+def test_geocode_5xx_raises_unavailable():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
     client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(GeocodeUnavailable, match="unavailable"):
+        geocode("anywhere", client=client)
+
+
+def test_geocode_4xx_raises_plain_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(GeocodeError, match="failed"):
+        geocode("anywhere", client=client)
+
+
+def test_geocode_network_error_raises_unavailable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("timed out")
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(GeocodeUnavailable, match="unreachable"):
         geocode("anywhere", client=client)

@@ -30,14 +30,14 @@ from pydantic import BaseModel, Field
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
 from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
 from ..engine import decide_actions, summarize_missed_opportunity
-from ..geocode import GeocodeError, geocode as do_geocode
+from ..geocode import GeocodeError, GeocodeUnavailable, geocode as do_geocode
 from ..state import (
     add_subscription,
     list_subscriptions,
+    mutate_state,
     read_state,
     remove_subscription,
     set_indoor_temp,
-    write_state,
 )
 from ..thermal import connect, estimate_savings, fit_model, load_observations
 from ..weather import NWSProvider, WeatherProvider
@@ -85,7 +85,9 @@ def create_app(
             return provider
         state = read_state(state_path)
         lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        cache = state.get("location_cache")
+        if cache:
+            mutate_state(state_path, lambda s: s.update(location_cache=cache))
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +185,8 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Absent means "unchanged" — only an explicit "" clears it.
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -198,20 +201,27 @@ def create_app(
             leave_at=new_leave,
             home_all_day=new_home,
         ))
-        _save_config()
+        try:
+            _save_config()
+        except Exception:
+            # Don't leave the in-memory schedule diverged from what the
+            # client was told (an error) and what's on disk.
+            setattr(cfg.schedule, day, current)
+            raise
         return {"ok": True, "day": day}
 
     @app.post("/api/indoor-temp")
     def post_indoor_temp(payload: IndoorTempIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        set_indoor_temp(st, payload.temperature_f, now_local())
-        write_state(state_path, st)
+        mutate_state(state_path, lambda s: set_indoor_temp(s, payload.temperature_f, now_local()))
         return {"ok": True, "indoor_f": payload.temperature_f}
 
     @app.post("/api/geocode")
     def post_geocode(payload: GeocodeIn) -> dict[str, Any]:
         try:
             result = do_geocode(payload.address)
+        except GeocodeUnavailable as e:
+            # Upstream outage — not the user's address.
+            raise HTTPException(502, str(e))
         except GeocodeError as e:
             raise HTTPException(400, str(e))
         cfg.location.address = result.matched_address
@@ -220,9 +230,7 @@ def create_app(
         if config_path is not None:
             _save_config()
         # Clear the cache so the next poll re-resolves.
-        st = read_state(state_path)
-        st.pop("location_cache", None)
-        write_state(state_path, st)
+        mutate_state(state_path, lambda s: s.pop("location_cache", None))
         return {
             "ok": True,
             "matched_address": result.matched_address,
@@ -239,18 +247,17 @@ def create_app(
 
     @app.post("/api/subscribe")
     def post_subscribe(sub: SubscriptionIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        added = add_subscription(st, sub.model_dump(exclude_none=True))
-        if added:
-            write_state(state_path, st)
-        return {"ok": True, "added": added, "total": len(list_subscriptions(st))}
+        data = sub.model_dump(exclude_none=True)
+
+        def _add(s: dict[str, Any]) -> tuple[bool, int]:
+            return add_subscription(s, data), len(list_subscriptions(s))
+
+        added, total = mutate_state(state_path, _add)
+        return {"ok": True, "added": added, "total": total}
 
     @app.post("/api/unsubscribe")
     def post_unsubscribe(payload: UnsubscribeIn) -> dict[str, Any]:
-        st = read_state(state_path)
-        removed = remove_subscription(st, payload.endpoint)
-        if removed:
-            write_state(state_path, st)
+        removed = mutate_state(state_path, lambda s: remove_subscription(s, payload.endpoint))
         return {"ok": True, "removed": removed}
 
     @app.get("/api/savings")
@@ -266,8 +273,25 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # Observations are ~15-minute polls, and the engine keeps returning
+        # "open" for every poll while an opportunity persists — so rows are
+        # poll samples, not events. Credit each open row with the time until
+        # the next observation (capped at 1 h across daemon downtime), and
+        # the trailing row with one poll interval.
+        poll_interval_hr = 0.25
+        open_events = 0
+        hours_open = 0.0
+        for i, o in enumerate(obs):
+            if o.action != "open":
+                continue
+            if i == 0 or obs[i - 1].action != "open":
+                open_events += 1
+            if i + 1 < len(obs):
+                gap_hr = (obs[i + 1].ts - o.ts).total_seconds() / 3600.0
+                hours_open += min(max(gap_hr, 0.0), 1.0)
+            else:
+                hours_open += poll_interval_hr
+        kwh, dollars = estimate_savings(model, hours_avoided=hours_open)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +303,8 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_events_counted": open_events,
+            "hours_open": hours_open,
         }
 
     if STATIC_DIR.exists():

@@ -119,11 +119,15 @@ class NestSource(IndoorTempSource):
             )
             r.raise_for_status()
             token = r.json()["access_token"]
-            self._access_token = token
-            return token
+        except (httpx.HTTPError, KeyError, ValueError) as e:
+            # An expired refresh token or a Google outage must degrade to the
+            # fallback temperature, not crash the poll cycle.
+            raise SourceUnavailable(f"nest token refresh failed: {e}") from e
         finally:
             if self._client is None:
                 client.close()
+        self._access_token = token
+        return token
 
     def current_temperature(self) -> float:
         self._ensure_complete()

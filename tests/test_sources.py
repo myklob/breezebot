@@ -80,3 +80,26 @@ def test_read_indoor_with_fallback_returns_provenance(tmp_path):
     val, name = read_indoor_with_fallback(src, fallback_f=71.5)
     assert val == 71.5
     assert name == "fallback"
+
+
+def test_nest_token_refresh_failure_degrades_to_source_unavailable():
+    import httpx
+
+    from nightcool.sources import NestSource
+
+    cfg = NestConfig(
+        project_id="p", client_id="c", client_secret="s",
+        refresh_token="expired", device_id="d",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    src = NestSource(cfg, client=client)
+    with pytest.raises(SourceUnavailable, match="token refresh"):
+        src.current_temperature()
+    # And the fallback wrapper turns it into a usable reading.
+    val, name = read_indoor_with_fallback(src, fallback_f=70.5)
+    assert val == 70.5
+    assert name == "fallback"
