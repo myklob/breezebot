@@ -120,8 +120,13 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates. Re-read before writing so a
+        # concurrent web-server write (subscribe, indoor temp) that landed
+        # during the geocode call isn't clobbered by our stale snapshot.
+        if "location_cache" in state:
+            fresh = read_state(state_path)
+            fresh["location_cache"] = state["location_cache"]
+            write_state(state_path, fresh)
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +138,11 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # Same stale-snapshot hazard as above: minutes of I/O have passed
+        # since `state` was read, so mutate a fresh copy instead.
+        fresh = read_state(state_path)
+        set_last_action(fresh, rec.action, now)
+        write_state(state_path, fresh)
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

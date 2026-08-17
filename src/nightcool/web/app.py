@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
 from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
-from ..engine import decide_actions, summarize_missed_opportunity
+from ..engine import decide_actions
 from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
@@ -183,7 +183,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +266,16 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        # The daemon logs one row per poll and keeps recommending "open"
+        # while conditions hold, so count actual open duration between
+        # consecutive rows (capped per gap to survive daemon outages)
+        # rather than treating every row as a separate open event.
+        open_hours = 0.0
+        for prev, nxt in zip(obs, obs[1:]):
+            if prev.action == "open":
+                gap_h = (nxt.ts - prev.ts).total_seconds() / 3600.0
+                open_hours += min(gap_h, 1.0)
+        kwh, dollars = estimate_savings(model, hours_avoided=open_hours)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +287,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_hours_counted": open_hours,
         }
 
     if STATIC_DIR.exists():
