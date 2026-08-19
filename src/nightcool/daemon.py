@@ -25,6 +25,7 @@ from .state import (
     read_state,
     remove_subscription,
     set_last_action,
+    update_state,
     write_state,
 )
 from .thermal import Observation, connect, log_observation
@@ -120,8 +121,14 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates, keeping whatever else has been
+        # written since this cycle read the file.
+        location_cache = state.get("location_cache")
+        if location_cache is not None:
+            update_state(
+                state_path,
+                lambda s: s.__setitem__("location_cache", location_cache),
+            )
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,14 +140,32 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # send() prunes dead push subscriptions from the file, so re-read
+        # before recording the action rather than writing this cycle's dict.
+        update_state(state_path, lambda s: set_last_action(s, rec.action, now))
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)
 
-    _log_observation(cfg, now, indoor, source_name, forecast, rec.action)
+    _log_observation(
+        cfg, now, indoor, source_name, forecast, rec.action,
+        windows_open=_windows_open_after(rec.action, last),
+    )
     return rec
+
+
+def _windows_open_after(action: str, last_action: str | None) -> bool | None:
+    """Whether the windows should be open once this cycle's advice is followed.
+
+    "no_change" keeps whatever the last instruction was. Unknown until the
+    first open or close of the run, which the thermal fit treats as missing.
+    """
+    effective = action if action in ("open", "close") else last_action
+    if effective == "open":
+        return True
+    if effective == "close":
+        return False
+    return None
 
 
 def _log_observation(
@@ -150,6 +175,7 @@ def _log_observation(
     source_name: str,
     forecast: list,
     action: str,
+    windows_open: bool | None = None,
 ) -> None:
     """Append the current poll to the thermal-model data store. Soft-fails."""
     try:
@@ -167,7 +193,7 @@ def _log_observation(
                     wind_mph=cur.wind_speed_mph if cur else None,
                     rain_pct=cur.rain_chance_pct if cur else None,
                     action=action,
-                    windows_open=None,
+                    windows_open=windows_open,
                     hvac_active=None,
                     indoor_source=source_name,
                 ),

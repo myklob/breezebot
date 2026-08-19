@@ -129,14 +129,22 @@ def load_observations(conn: sqlite3.Connection) -> list[Observation]:
                 indoor_source=row[8],
             )
         )
+    # SQL orders the ISO strings, which puts "01:00-07:00" before "01:30-06:00"
+    # whenever the UTC offset changes. Re-sort on the parsed instant so a DST
+    # boundary cannot hand fit_model rows that run backwards in time.
+    out.sort(key=lambda o: o.ts.timestamp())
     return out
 
 
-def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple[tuple[float, float, float], float]:
+def _solve_least_squares(
+    rows: list[tuple[float, float, float, float]],
+) -> tuple[tuple[float, float, float], float] | None:
     """Solve a 3-feature OLS regression by hand, no numpy dependency.
 
     rows is a list of (dT_dt, vent_driver, solar_driver, hvac_indicator).
-    Returns ((alpha, beta, gamma), r_squared).
+    Returns ((alpha, beta, gamma), r_squared), or None when the system is
+    singular — a feature column that never varies leaves nothing to fit, and
+    reporting all-zero coefficients would look like a real result.
     """
     n = len(rows)
     # Build X^T X (3x3) and X^T y (3,) by accumulation.
@@ -160,7 +168,7 @@ def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple
             a[k], a[pivot] = a[pivot], a[k]
             b[k], b[pivot] = b[pivot], b[k]
         if abs(a[k][k]) < 1e-12:
-            return ((0.0, 0.0, 0.0), 0.0)
+            return None
         for i in range(k + 1, 3):
             f = a[i][k] / a[k][k]
             for j in range(k, 3):
@@ -210,7 +218,10 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
 
     if len(rows) < MIN_SAMPLES // 2:
         return None
-    (alpha, beta, gamma), r2 = _solve_least_squares(rows)
+    solved = _solve_least_squares(rows)
+    if solved is None:
+        return None
+    (alpha, beta, gamma), r2 = solved
     return ThermalModel(
         alpha_ventilation=alpha,
         beta_solar=beta,

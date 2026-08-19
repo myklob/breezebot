@@ -125,6 +125,38 @@ windows: [{id: w, name: W, exposure: exposed, security: secure}]
     assert raw["schedule"]["mon"]["leave_at"].startswith("08:00")
 
 
+def test_post_schedule_home_all_day_false_keeps_leave_at(tmp_path):
+    """Setting home_all_day alone must not erase the day's departure time."""
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+location: {latitude: 39, longitude: -104, timezone: UTC}
+windows: [{id: w, name: W, exposure: exposed, security: secure}]
+""".strip()
+    )
+    from nightcool.config import load_config
+    cfg = load_config(config_path)
+    provider = MockWeatherProvider(_forecast(datetime(2024, 6, 15, 14, tzinfo=timezone.utc)))
+    app = create_app(cfg, state, config_path=config_path, provider=provider)
+    with TestClient(app) as c:
+        assert c.post(
+            "/api/schedule/mon",
+            json={"target_f": 68.0, "leave_at": "07:30", "home_all_day": False},
+        ).status_code == 200
+
+        assert c.post("/api/schedule/mon", json={"home_all_day": False}).status_code == 200
+
+        day = c.get("/api/schedule").json()["mon"]
+        assert day["leave_at"].startswith("07:30")
+        assert day["target_f"] == 68.0
+
+        # An explicit empty string still clears it.
+        assert c.post("/api/schedule/mon", json={"leave_at": ""}).status_code == 200
+        assert c.get("/api/schedule").json()["mon"]["leave_at"] is None
+
+
 def test_post_geocode_resolves_and_persists(client):
     c, state, cfg, _ = client
     fake = GeocodeResult(latitude=39.74, longitude=-104.99, matched_address="Denver, CO")

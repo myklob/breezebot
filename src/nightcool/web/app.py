@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
-from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
+from ..daemon import POLL_MINUTES, format_notification, read_indoor_temp, resolve_coordinates
 from ..engine import decide_actions, summarize_missed_opportunity
 from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
@@ -183,7 +183,9 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Omitted means unchanged. Setting home_all_day alone must not wipe
+            # the day's departure time; only home_all_day=true clears it, below.
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +268,11 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
+        # Each row is one poll, not one night: counting rows as multi-hour
+        # events overstated the saving by the number of polls per hour.
         open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        hours_avoided = open_actions * (POLL_MINUTES / 60.0)
+        kwh, dollars = estimate_savings(model, hours_avoided=hours_avoided)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,6 +284,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
+            "hours_avoided": hours_avoided,
             "open_events_counted": open_actions,
         }
 

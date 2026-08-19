@@ -257,3 +257,23 @@ def test_dew_point_gate_passes_through_unknown_dew_point():
     forecast = [make_hour(i, 65.0, dew_point_f=None) for i in range(12)]
     rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
     assert rec.action == "open"
+
+
+def test_warmup_close_is_not_reported_as_a_comfort_floor_warning():
+    """Warm-up and floor can land on the same timestamp object.
+
+    The winner was identified by comparing the chosen timestamp against the
+    floor timestamp with `is`, so a close driven by the outdoor air warming
+    back up was announced as a comfort-floor warning.
+    """
+    forecast = [
+        make_hour(0, 60.0),
+        make_hour(1, 73.0),
+        make_hour(2, 74.0),
+        make_hour(3, 75.0),
+    ]
+    rec = _decide(75.0, forecast, [make_window()], target_f=70.0, floor=74.5)
+
+    assert rec.action == "open"
+    # The only "Close by …" warning the engine emits is the comfort-floor one.
+    assert not any(w.startswith("Close by") for w in rec.warnings), rec.warnings

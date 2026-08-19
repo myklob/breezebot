@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,20 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def update_state(path: Path, mutate: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Re-read the file, apply `mutate`, and write the result.
+
+    A caller that holds a state dict across slow work — a forecast fetch, a
+    push send that prunes dead subscriptions, a user setting their indoor
+    temperature — would otherwise write that stale dict back and undo whatever
+    landed in the meantime.
+    """
+    state = read_state(path)
+    mutate(state)
+    write_state(path, state)
+    return state
 
 
 def get_last_action(state: dict[str, Any]) -> str | None:

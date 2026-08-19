@@ -101,3 +101,59 @@ def test_estimate_savings_scales_with_hours():
 
     kwh_zero, _ = estimate_savings(None, hours_avoided=-1.0)
     assert kwh_zero == 0.0
+
+
+def test_fit_model_returns_none_when_features_never_vary():
+    """The daemon logged windows_open/hvac_active as NULL for a long time.
+
+    That leaves the vent and hvac columns identically zero, so the normal
+    equations are singular. Reporting all-zero coefficients would look like a
+    real fit and feed a fabricated model to /api/savings.
+    """
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    rows = [
+        Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=70.0 + i * 0.01,
+            outdoor_f=60.0,
+            wind_mph=0,
+            rain_pct=0,
+            action="no_change",
+            windows_open=None,
+            hvac_active=None,
+        )
+        for i in range(MIN_SAMPLES + 44)
+    ]
+    assert fit_model(rows) is None
+
+
+def test_load_observations_orders_across_a_dst_change(tmp_path):
+    """ISO strings sort by text, so a UTC-offset change reorders the rows.
+
+    "01:00-07:00" sorts before "01:30-06:00" even though it happened later.
+    """
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/Denver")
+    conn = connect(tmp_path / "dst.sqlite")
+    # Six 15-minute polls straddling the 2024 fall-back, logged in real order.
+    stamps = [
+        datetime(2024, 11, 3, 7, 30, tzinfo=timezone.utc).astimezone(tz),
+        datetime(2024, 11, 3, 7, 45, tzinfo=timezone.utc).astimezone(tz),
+        datetime(2024, 11, 3, 8, 0, tzinfo=timezone.utc).astimezone(tz),
+        datetime(2024, 11, 3, 8, 15, tzinfo=timezone.utc).astimezone(tz),
+        datetime(2024, 11, 3, 8, 30, tzinfo=timezone.utc).astimezone(tz),
+        datetime(2024, 11, 3, 8, 45, tzinfo=timezone.utc).astimezone(tz),
+    ]
+    for i, ts in enumerate(stamps):
+        log_observation(conn, Observation(
+            ts=ts, indoor_f=70.0 + i, outdoor_f=50.0,
+            wind_mph=0, rain_pct=0, action="no_change",
+            windows_open=None, hvac_active=None,
+        ))
+
+    loaded = load_observations(conn)
+    assert [o.indoor_f for o in loaded] == [70.0, 71.0, 72.0, 73.0, 74.0, 75.0]
+    assert all(
+        a.ts.timestamp() <= b.ts.timestamp() for a, b in zip(loaded, loaded[1:])
+    )
