@@ -32,7 +32,8 @@ def test_parse_wind_direction_known_and_unknown():
     assert parse_wind_direction_deg("N") == 0.0
     assert parse_wind_direction_deg("ESE") == 112.5
     assert parse_wind_direction_deg("nw") == 315.0
-    assert parse_wind_direction_deg("WAT") == 0.0  # unknown → 0
+    assert parse_wind_direction_deg("WAT") is None  # unknown → None
+    assert parse_wind_direction_deg("") is None  # calm/variable → None
 
 
 def test_nws_period_parser_handles_fixture():

@@ -22,6 +22,7 @@ from .state import (
     get_indoor_temp_or_none,
     get_last_action,
     list_subscriptions,
+    merge_write,
     read_state,
     remove_subscription,
     set_last_action,
@@ -120,8 +121,10 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates without clobbering keys the web
+        # server may have written while the geocode was in flight.
+        if "location_cache" in state:
+            merge_write(state_path, {"location_cache": state["location_cache"]})
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -134,13 +137,31 @@ def run_once(
         title, body = format_notification(rec)
         notifier.send(title, body)
         set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        merge_write(
+            state_path,
+            {"last_action": state["last_action"], "last_action_time": state["last_action_time"]},
+        )
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)
 
-    _log_observation(cfg, now, indoor, source_name, forecast, rec.action)
+    # The current window state is whatever we last *told* the user to do —
+    # open until a CLOSE goes out, closed after. Logging the true state (rather
+    # than a constant None) is what makes the thermal model fittable later.
+    _log_observation(
+        cfg, now, indoor, source_name, forecast, rec.action,
+        windows_open=_windows_open_from_action(get_last_action(state)),
+    )
     return rec
+
+
+def _windows_open_from_action(last_action: str | None) -> bool | None:
+    """Infer current window state from the most recent notified action."""
+    if last_action == "open":
+        return True
+    if last_action == "close":
+        return False
+    return None
 
 
 def _log_observation(
@@ -150,6 +171,7 @@ def _log_observation(
     source_name: str,
     forecast: list,
     action: str,
+    windows_open: bool | None = None,
 ) -> None:
     """Append the current poll to the thermal-model data store. Soft-fails."""
     try:
@@ -167,7 +189,7 @@ def _log_observation(
                     wind_mph=cur.wind_speed_mph if cur else None,
                     rain_pct=cur.rain_chance_pct if cur else None,
                     action=action,
-                    windows_open=None,
+                    windows_open=windows_open,
                     hvac_active=None,
                     indoor_source=source_name,
                 ),

@@ -28,18 +28,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
-from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
+from ..daemon import POLL_MINUTES, format_notification, read_indoor_temp, resolve_coordinates
 from ..engine import decide_actions
 from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
     list_subscriptions,
+    merge_write,
     read_state,
     remove_subscription,
     set_indoor_temp,
     write_state,
 )
-from ..thermal import connect, estimate_savings, fit_model, load_observations
+from ..thermal import connect, estimate_savings, fit_model, load_observations, open_hours
 from ..weather import NWSProvider, WeatherProvider
 
 
@@ -85,7 +86,8 @@ def create_app(
             return provider
         state = read_state(state_path)
         lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        if "location_cache" in state:
+            merge_write(state_path, {"location_cache": state["location_cache"]})
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +185,9 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            # Field omitted → keep the stored time. An explicit clear uses "".
+            # (If home_all_day is being turned on, the block below nulls it.)
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:
@@ -266,8 +270,8 @@ def create_app(
         model = fit_model(obs)
         if model is None:
             return {"model": None, "samples": len(obs), "reason": "insufficient data"}
-        open_actions = sum(1 for o in obs if o.action == "open")
-        kwh, dollars = estimate_savings(model, hours_avoided=open_actions * 6.0)
+        hours_open = open_hours(obs, poll_interval_hours=POLL_MINUTES / 60.0)
+        kwh, dollars = estimate_savings(model, hours_avoided=hours_open)
         return {
             "model": {
                 "alpha_ventilation": model.alpha_ventilation,
@@ -279,7 +283,7 @@ def create_app(
             },
             "kwh_saved": kwh,
             "dollars_saved": dollars,
-            "open_events_counted": open_actions,
+            "open_hours_counted": round(hours_open, 2),
         }
 
     if STATIC_DIR.exists():

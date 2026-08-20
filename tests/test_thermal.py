@@ -13,6 +13,7 @@ from nightcool.thermal import (
     fit_model,
     load_observations,
     log_observation,
+    open_hours,
 )
 
 
@@ -92,6 +93,53 @@ def test_fit_model_recovers_synthetic_coefficients(tmp_path):
     # Coefficients should be in the right ballpark.
     assert model.alpha_ventilation > 0  # ventilation cools when outdoor < indoor.
     assert model.gamma_hvac < 0          # HVAC removes heat.
+
+
+def test_fit_model_returns_none_when_a_feature_has_no_variation(tmp_path):
+    # Windows never recorded open + HVAC never recorded → the vent and hvac
+    # regressor columns are all-zero, so the system is singular. That must
+    # surface as "cannot fit" (None), not as a fabricated all-zero model.
+    conn = connect(tmp_path / "db.sqlite")
+    base = datetime(2024, 6, 15, tzinfo=timezone.utc)
+    indoor = 72.0
+    for i in range(MIN_SAMPLES + 40):
+        indoor += 0.1
+        log_observation(conn, Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=indoor, outdoor_f=60.0,
+            wind_mph=0, rain_pct=0, action="no_change",
+            windows_open=None, hvac_active=None,
+        ))
+    assert fit_model(load_observations(conn)) is None
+
+
+def test_open_hours_uses_time_not_row_count():
+    # 24 poll rows at 15-min cadence spanning a 6-hour open window should count
+    # as ~6 hours, not 24 rows * 6 hours.
+    base = datetime(2024, 6, 15, 22, 0, tzinfo=timezone.utc)
+    obs = [
+        Observation(
+            ts=base + timedelta(minutes=15 * i),
+            indoor_f=70.0, outdoor_f=60.0, wind_mph=0, rain_pct=0,
+            action="open", windows_open=True, hvac_active=None,
+        )
+        for i in range(25)  # 24 intervals of 15 min = 6.0 h
+    ]
+    hours = open_hours(obs, poll_interval_hours=15 / 60.0)
+    assert abs(hours - 6.0) < 1e-9
+
+
+def test_open_hours_caps_gaps_at_one_interval():
+    # A long gap between polls (daemon downtime) must not inflate the total.
+    base = datetime(2024, 6, 15, 22, 0, tzinfo=timezone.utc)
+    obs = [
+        Observation(ts=base, indoor_f=70.0, outdoor_f=60.0, wind_mph=0, rain_pct=0,
+                    action="open", windows_open=True, hvac_active=None),
+        Observation(ts=base + timedelta(hours=8), indoor_f=70.0, outdoor_f=60.0,
+                    wind_mph=0, rain_pct=0, action="open", windows_open=True, hvac_active=None),
+    ]
+    hours = open_hours(obs, poll_interval_hours=15 / 60.0)
+    assert abs(hours - 0.25) < 1e-9
 
 
 def test_estimate_savings_scales_with_hours():

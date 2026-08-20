@@ -132,11 +132,15 @@ def load_observations(conn: sqlite3.Connection) -> list[Observation]:
     return out
 
 
-def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple[tuple[float, float, float], float]:
+def _solve_least_squares(
+    rows: list[tuple[float, float, float, float]]
+) -> tuple[tuple[float, float, float], float] | None:
     """Solve a 3-feature OLS regression by hand, no numpy dependency.
 
     rows is a list of (dT_dt, vent_driver, solar_driver, hvac_indicator).
-    Returns ((alpha, beta, gamma), r_squared).
+    Returns ((alpha, beta, gamma), r_squared), or None when the system is
+    singular (e.g. a feature column carries no variation), which the caller
+    must treat as "cannot fit" rather than as an all-zero model.
     """
     n = len(rows)
     # Build X^T X (3x3) and X^T y (3,) by accumulation.
@@ -160,7 +164,7 @@ def _solve_least_squares(rows: list[tuple[float, float, float, float]]) -> tuple
             a[k], a[pivot] = a[pivot], a[k]
             b[k], b[pivot] = b[pivot], b[k]
         if abs(a[k][k]) < 1e-12:
-            return ((0.0, 0.0, 0.0), 0.0)
+            return None
         for i in range(k + 1, 3):
             f = a[i][k] / a[k][k]
             for j in range(k, 3):
@@ -210,7 +214,10 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
 
     if len(rows) < MIN_SAMPLES // 2:
         return None
-    (alpha, beta, gamma), r2 = _solve_least_squares(rows)
+    solved = _solve_least_squares(rows)
+    if solved is None:
+        return None
+    (alpha, beta, gamma), r2 = solved
     return ThermalModel(
         alpha_ventilation=alpha,
         beta_solar=beta,
@@ -223,10 +230,30 @@ def fit_model(obs: Iterable[Observation]) -> ThermalModel | None:
 
 # ---- Savings ----
 
-# Typical residential split-system AC: ~3.5 kW input for 12k BTU/h cooling.
+# Electrical draw we credit as avoided while the windows are doing the
+# cooling. ~3.5 kW is a representative input for a typical ~3-ton (36k BTU/h)
+# central AC at SEER ~12; override per house for a smaller/larger system.
 AC_KW_INPUT = 3.5
 # Default electricity price ($/kWh). Override per house.
 DEFAULT_PRICE_PER_KWH = 0.17
+
+
+def open_hours(obs: Iterable[Observation], poll_interval_hours: float) -> float:
+    """Total hours the windows were recommended open, from the logged polls.
+
+    Each poll writes one row, so a naive count of "open" rows multiplied by a
+    fixed window length wildly overcounts (24 rows for a 6-hour night at a
+    15-minute cadence). Instead, attribute to each open poll the real time
+    until the next poll, capped at one poll interval so a gap in the log
+    (daemon downtime) doesn't inflate the total.
+    """
+    pts = list(obs)
+    total = 0.0
+    for prev, cur in zip(pts, pts[1:]):
+        if prev.action == "open":
+            dt = (cur.ts - prev.ts).total_seconds() / 3600.0
+            total += min(max(0.0, dt), poll_interval_hours)
+    return total
 
 
 def estimate_savings(

@@ -39,11 +39,17 @@ def parse_wind_speed_mph(s: str | None) -> float:
     return float(nums[-1])
 
 
-def parse_wind_direction_deg(s: str | None) -> float:
-    """Convert a cardinal-direction string like 'NNW' to degrees. Unknown → 0."""
+def parse_wind_direction_deg(s: str | None) -> float | None:
+    """Convert a cardinal-direction string like 'NNW' to degrees.
+
+    NWS emits an empty string for calm/variable hours. Return None for that
+    and for anything unrecognized — "unknown", not "due north" — so the
+    bad-wind-sector gate treats it as a pass-through rather than falsely
+    matching a sector centered on 0°.
+    """
     if not s:
-        return 0.0
-    return WIND_DIRECTIONS_DEG.get(s.strip().upper(), 0.0)
+        return None
+    return WIND_DIRECTIONS_DEG.get(s.strip().upper())
 
 
 class WeatherProvider(ABC):

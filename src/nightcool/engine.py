@@ -44,7 +44,9 @@ class HourlyForecast:
     temperature_f: float
     wind_speed_mph: float
     wind_gust_mph: float
-    wind_direction_deg: float
+    # None means the direction is unknown (calm/variable, or an unparseable
+    # provider value). The bad-wind-sector gate treats None as a pass-through.
+    wind_direction_deg: float | None
     rain_chance_pct: float
     # Optional: not every provider/period exposes dew point. None means
     # "unknown" and the dew-point gate (if enabled) treats it as a pass-through
@@ -70,9 +72,13 @@ class Recommendation:
             object.__setattr__(self, "warnings", [])
 
 
-def _in_bad_sector(direction_deg: float, sector: tuple[float, float] | None) -> bool:
-    """Return True if `direction_deg` is inside the user's bad-wind arc."""
-    if sector is None:
+def _in_bad_sector(direction_deg: float | None, sector: tuple[float, float] | None) -> bool:
+    """Return True if `direction_deg` is inside the user's bad-wind arc.
+
+    An unknown direction (None) is never treated as in-sector — better to
+    offer the cooling than to refuse it on missing data.
+    """
+    if sector is None or direction_deg is None:
         return False
     lo, hi = sector
     if lo <= hi:
@@ -120,7 +126,6 @@ def _hour_passes_open_criteria(
         hour.temperature_f <= open_threshold
         and hour.temperature_f >= prefs.min_tolerable_outdoor_f
         and hour.temperature_f <= useful_max
-        and not _in_bad_sector(hour.wind_direction_deg, warnings.bad_wind_sector_deg)
     )
 
 
@@ -188,19 +193,24 @@ def _find_close_moment(
 
     Returns (timestamp, optional warning string).
     """
-    threshold = indoor_temp_f - prefs.hysteresis_f
     open_idx = forecast.index(open_moment)
     tail = forecast[open_idx:]
 
+    # Predict indoor path under "windows open" assumption, then find the two
+    # crossings against that path — not against the (pre-cooling) starting
+    # temp. Once the house has cooled toward the outdoor air, the moment worth
+    # closing is when the outdoor air climbs back above where the house now
+    # sits, not above where it started.
+    predicted_path = predict_indoor_path(indoor_temp_f, tail)
+
     warmup_at: datetime | None = None
-    for hour in tail[1:]:
-        if hour.temperature_f >= threshold:
+    for hour, (_, predicted) in zip(tail[1:], predicted_path[1:]):
+        if hour.temperature_f >= predicted - prefs.hysteresis_f:
             warmup_at = hour.timestamp
             break
 
-    # Predict indoor path under "windows open" assumption.
     floor_hit: datetime | None = None
-    for ts, predicted in predict_indoor_path(indoor_temp_f, tail):
+    for ts, predicted in predicted_path:
         if predicted <= floor.min_indoor_f:
             floor_hit = ts
             break

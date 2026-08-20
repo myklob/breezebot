@@ -39,6 +39,21 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         raise
 
 
+def merge_write(path: Path, updates: dict[str, Any]) -> None:
+    """Re-read the on-disk state and write back only `updates`' top-level keys.
+
+    The daemon's poll cycle spans network I/O (indoor read, forecast fetch)
+    between reading state and writing it. Writing back the whole stale snapshot
+    would clobber anything the web server persisted in the meantime — most
+    painfully a push subscription the user just registered. Re-reading right
+    before the write, and touching only the keys we actually changed, shrinks
+    the clobber window to local file I/O and leaves untouched keys intact.
+    """
+    fresh = read_state(path)
+    fresh.update(updates)
+    write_state(path, fresh)
+
+
 def get_last_action(state: dict[str, Any]) -> str | None:
     return state.get("last_action")
 

@@ -132,10 +132,33 @@ def test_bad_wind_sector_blocks_only_facing_windows_when_wind_is_outside_sector(
     assert set(rec.eligible_windows) == {"east_facing", "west_facing"}
 
 
-def test_bad_wind_direction_blocks_opening_entirely():
+def test_bad_wind_sector_skips_only_flagged_windows_when_wind_is_in_sector():
+    # Wind blowing from the bad sector: only the flagged window is skipped;
+    # the house still gets the cooling through the other window.
     forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(60.0, 120.0))
+    windows = [
+        make_window(id="east_facing", on_bad=True),
+        make_window(id="west_facing", on_bad=False),
+    ]
+    rec = _decide(71.0, forecast, windows, bad_sector=(60.0, 120.0))
+    assert rec.action == "open"
+    assert rec.eligible_windows == ["west_facing"]
+
+
+def test_bad_wind_direction_blocks_only_flagged_windows():
+    # A window flagged on_bad with wind in the sector is the one that's blocked;
+    # with no other window, opening is suppressed entirely.
+    forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(60.0, 120.0))
     assert rec.action != "open"
+
+
+def test_unflagged_window_not_blocked_by_bad_wind():
+    # An unflagged window is never blocked by wind direction (README contract).
+    forecast = [make_hour(i, 62.0, wind_dir=90.0) for i in range(12)]
+    rec = _decide(71.0, forecast, [make_window(on_bad=False)], bad_sector=(60.0, 120.0))
+    assert rec.action == "open"
+    assert rec.eligible_windows == ["br_west"]
 
 
 def test_unsecure_window_blocked_by_gusts_when_warning_on():
@@ -172,8 +195,16 @@ def test_close_signal_when_outdoor_warm_enough():
 
 def test_bad_sector_wraps_around_north():
     forecast = [make_hour(i, 62.0, wind_dir=5.0) for i in range(12)]
-    rec = _decide(71.0, forecast, [make_window()], bad_sector=(350.0, 10.0))
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(350.0, 10.0))
     assert rec.action != "open"
+
+
+def test_unknown_wind_direction_does_not_match_bad_sector():
+    # Calm/variable hours report an unknown direction (None); a flagged window
+    # must not be blocked on missing data, even by a sector centered on north.
+    forecast = [make_hour(i, 62.0, wind_dir=None) for i in range(12)]
+    rec = _decide(71.0, forecast, [make_window(on_bad=True)], bad_sector=(350.0, 10.0))
+    assert rec.action == "open"
 
 
 # ---- Quiet hours + dedup (notification layer) ----
@@ -219,6 +250,22 @@ def test_open_close_at_pulled_in_when_floor_would_be_hit():
     assert rec.close_at is not None
     assert (rec.close_at - forecast[0].timestamp).total_seconds() < 8 * 3600
     assert rec.warnings  # we surface the floor reason
+
+
+def test_close_time_tracks_cooled_indoor_not_starting_temp():
+    # Indoor starts warm (82). Outdoor dips then climbs back to the mid-70s —
+    # never reaching the starting temp, but crossing back above where the house
+    # will actually have settled. The close time must land at that real
+    # crossover, not fall through to the far-off morning fallback.
+    temps = [74, 72, 70, 69, 71, 74, 76, 78, 78, 77, 75, 72]
+    forecast = [make_hour(i, float(t)) for i, t in enumerate(temps)]
+    rec = _decide(82.0, forecast, [make_window()], target_f=70.0, floor=10.0)
+    assert rec.action == "open"
+    assert rec.close_at is not None
+    # The far fallback would be the next morning (>= 8h out); the real crossover
+    # is within the 12-hour forecast window.
+    hours_out = (rec.close_at - forecast[0].timestamp).total_seconds() / 3600.0
+    assert hours_out <= 11.0
 
 
 def test_open_suppressed_if_floor_overshot_immediately():
