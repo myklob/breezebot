@@ -37,6 +37,7 @@ from ..state import (
     read_state,
     remove_subscription,
     set_indoor_temp,
+    update_state,
     write_state,
 )
 from ..thermal import connect, estimate_savings, fit_model, load_observations
@@ -85,7 +86,9 @@ def create_app(
             return provider
         state = read_state(state_path)
         lat, lon = resolve_coordinates(cfg, state)
-        write_state(state_path, state)
+        cache = state.get("location_cache")
+        if cache is not None:
+            update_state(state_path, lambda st: st.update(location_cache=cache))
         return NWSProvider(lat, lon)
 
     def now_local() -> datetime:
@@ -183,7 +186,7 @@ def create_app(
         new_target = payload.target_f if payload.target_f is not None else current.target_f
         new_home = payload.home_all_day if payload.home_all_day is not None else current.home_all_day
         if payload.leave_at is None:
-            new_leave = current.leave_at if payload.home_all_day is None else None
+            new_leave = current.leave_at
         elif payload.leave_at == "":
             new_leave = None
         else:

@@ -80,3 +80,70 @@ def test_run_once_dedups_repeated_open(tmp_path, capsys):
     stored = json.loads(state_path.read_text())
     assert stored["last_action"] == "open"
     assert (tmp_path / "data.sqlite").exists()
+
+
+class _PruningNotifier:
+    """Mimics WebPushNotifier: send() discovers a 410-gone subscription and
+    prunes it through the callback the daemon wired up."""
+
+    def __init__(self, pruner):
+        self._pruner = pruner
+
+    def send(self, title: str, body: str) -> None:
+        self._pruner("https://push.example/DEAD")
+
+
+def test_run_once_does_not_resurrect_pruned_subscription(tmp_path):
+    state_path = tmp_path / "state.json"
+    dead_sub = {"endpoint": "https://push.example/DEAD", "keys": {"auth": "x", "p256dh": "y"}}
+    write_state(state_path, {"indoor_temp_f": 71.0, "push_subscriptions": [dead_sub]})
+
+    cfg = _make_cfg(tmp_path)
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = MockWeatherProvider(_cool_forecast(fake_now))
+
+    def fake_make_notifier(ncfg, *, state_path=None, subscription_loader=None,
+                           prune_subscription=None):
+        return _PruningNotifier(prune_subscription)
+
+    with patch("nightcool.daemon.datetime") as dt, \
+         patch("nightcool.daemon.make_notifier", fake_make_notifier):
+        dt.now.return_value = fake_now
+        rec = run_once(cfg, state_path, provider=provider)
+
+    assert rec.action == "open"
+    stored = json.loads(state_path.read_text())
+    assert stored.get("push_subscriptions") == []
+    assert stored["last_action"] == "open"
+
+
+class _ConcurrentWriterNotifier:
+    """Simulates the web process storing a new indoor temp while the daemon
+    is blocked inside notifier.send()."""
+
+    def __init__(self, state_path: Path):
+        self._state_path = state_path
+
+    def send(self, title: str, body: str) -> None:
+        from nightcool.state import read_state
+        st = read_state(self._state_path)
+        set_indoor_temp(st, 68.0, datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc))
+        write_state(self._state_path, st)
+
+
+def test_run_once_preserves_concurrent_state_updates(tmp_path):
+    state_path = tmp_path / "state.json"
+    write_state(state_path, {"indoor_temp_f": 71.0})
+    cfg = _make_cfg(tmp_path)
+    fake_now = datetime(2024, 6, 15, 14, 0, tzinfo=timezone.utc)
+    provider = MockWeatherProvider(_cool_forecast(fake_now))
+
+    with patch("nightcool.daemon.datetime") as dt, \
+         patch("nightcool.daemon.make_notifier",
+               lambda ncfg, **kw: _ConcurrentWriterNotifier(state_path)):
+        dt.now.return_value = fake_now
+        run_once(cfg, state_path, provider=provider)
+
+    stored = json.loads(state_path.read_text())
+    assert stored["indoor_temp_f"] == 68.0
+    assert stored["last_action"] == "open"

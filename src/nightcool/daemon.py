@@ -25,6 +25,7 @@ from .state import (
     read_state,
     remove_subscription,
     set_last_action,
+    update_state,
     write_state,
 )
 from .thermal import Observation, connect, log_observation
@@ -120,8 +121,10 @@ def run_once(
         except GeocodeError as e:
             logger.error("Could not geocode location: %s", e)
             return Recommendation("no_change", [], None, None, f"Geocoding failed: {e}")
-        # Persist any newly-cached coordinates.
-        write_state(state_path, state)
+        # Persist any newly-cached coordinates without touching other fields.
+        cache = state.get("location_cache")
+        if cache is not None:
+            update_state(state_path, lambda st: st.update(location_cache=cache))
     forecast = provider.hourly_forecast(hours=FORECAST_HOURS)
     rec = decide_actions(
         indoor, forecast, cfg.windows, now,
@@ -133,8 +136,9 @@ def run_once(
         notifier = _build_notifier(cfg, state_path)
         title, body = format_notification(rec)
         notifier.send(title, body)
-        set_last_action(state, rec.action, now)
-        write_state(state_path, state)
+        # send() can block for seconds and its 410-prune callback writes
+        # state, so mutate a fresh read instead of the copy from cycle start.
+        update_state(state_path, lambda st: set_last_action(st, rec.action, now))
         logger.info("Notified: %s — %s", title, body)
     else:
         logger.debug("No notification: action=%s last=%s", rec.action, last)

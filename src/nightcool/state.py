@@ -39,6 +39,21 @@ def write_state(path: Path, state: dict[str, Any]) -> None:
         raise
 
 
+def update_state(path: Path, mutate: Any) -> dict[str, Any]:
+    """Read-modify-write against fresh on-disk state.
+
+    Re-reading immediately before the write keeps a caller that has held a
+    state dict across a slow operation (e.g. notifier.send) from clobbering
+    fields another writer changed in the meantime, such as the pruner
+    removing a dead push subscription or the web process storing a new
+    indoor temperature.
+    """
+    state = read_state(path)
+    mutate(state)
+    write_state(path, state)
+    return state
+
+
 def get_last_action(state: dict[str, Any]) -> str | None:
     return state.get("last_action")
 
