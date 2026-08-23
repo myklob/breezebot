@@ -180,10 +180,13 @@ def _find_close_moment(
     prefs: Prefs,
     floor: ComfortFloor,
     schedule: DailySchedule,
+    warnings: WarningPrefs,
 ) -> tuple[datetime, str | None]:
     """Earliest of:
       * outdoor crossing back above (indoor - hysteresis)
       * the predicted indoor temp hitting the comfort floor
+      * dew point rising past the gate (if enabled) — the gate vets the open
+        hour, so the close side must vet the rest of the open period too
       * tomorrow's `leave_at` (or, fallback, quiet_hours_end)
 
     Returns (timestamp, optional warning string).
@@ -205,19 +208,31 @@ def _find_close_moment(
             floor_hit = ts
             break
 
+    dew_gate_at: datetime | None = None
+    if warnings.max_dew_point_f is not None:
+        for hour in tail[1:]:
+            if hour.dew_point_f is not None and hour.dew_point_f > warnings.max_dew_point_f:
+                dew_gate_at = hour.timestamp
+                break
+
     # The morning close: use the leave_at for the day we'd be waking into.
     morning_leave = _morning_leave_after(open_moment.timestamp, schedule, prefs)
 
-    candidates: list[tuple[datetime, str]] = []
+    # (timestamp, reason, warn-the-user) — warn on the closes the user
+    # wouldn't anticipate from temperature alone.
+    candidates: list[tuple[datetime, str, bool]] = []
     if warmup_at is not None:
-        candidates.append((warmup_at, "outdoor warmed back up"))
+        candidates.append((warmup_at, "outdoor warmed back up", False))
     if floor_hit is not None:
-        candidates.append((floor_hit, f"indoor would hit {floor.min_indoor_f:.0f} °F floor"))
-    candidates.append((morning_leave, "morning routine"))
+        candidates.append((floor_hit, f"indoor would hit {floor.min_indoor_f:.0f} °F floor", True))
+    if dew_gate_at is not None:
+        candidates.append(
+            (dew_gate_at, f"dew point rises past {warnings.max_dew_point_f:.0f} °F", True)
+        )
+    candidates.append((morning_leave, "morning routine", False))
 
-    best_ts, best_reason = min(candidates, key=lambda c: c[0])
-    warning = best_reason if best_ts is floor_hit else None
-    return best_ts, warning
+    best_ts, best_reason, warn = min(candidates, key=lambda c: c[0])
+    return best_ts, best_reason if warn else None
 
 
 def _morning_leave_after(now_local: datetime, schedule: DailySchedule, prefs: Prefs) -> datetime:
@@ -282,7 +297,7 @@ def decide_actions(
         starts_in = open_moment.timestamp - now
         if eligible and starts_in <= timedelta(hours=OPEN_LOOKAHEAD_HOURS):
             close_at, floor_warning = _find_close_moment(
-                hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule,
+                hourly_forecast, open_moment, indoor_temp_f, prefs, comfort_floor, schedule, warnings,
             )
             warn_list: list[str] = []
             if floor_warning:

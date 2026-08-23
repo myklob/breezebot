@@ -257,3 +257,24 @@ def test_dew_point_gate_passes_through_unknown_dew_point():
     forecast = [make_hour(i, 65.0, dew_point_f=None) for i in range(12)]
     rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
     assert rec.action == "open"
+
+
+def test_dew_point_crossing_mid_period_closes_before_the_muggy_air():
+    # Dry at the open hour, but a humid front arrives at hour 3. The close
+    # recommendation must not hold windows open through air the gate refuses.
+    forecast = [
+        make_hour(i, 63.0, dew_point_f=50.0 if i < 3 else 75.0) for i in range(12)
+    ]
+    rec = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    assert rec.action == "open"
+    assert rec.close_at == forecast[3].timestamp
+    assert any("dew point" in w for w in rec.warnings)
+
+
+def test_uniform_dry_dew_point_still_closes_on_morning_routine():
+    # No dew crossing → the dew trigger must not shorten a normal night.
+    forecast = [make_hour(i, 63.0, dew_point_f=50.0) for i in range(12)]
+    with_gate = _decide(75.0, forecast, [make_window()], max_dew_point_f=60.0)
+    without_gate = _decide(75.0, forecast, [make_window()])
+    assert with_gate.action == "open"
+    assert with_gate.close_at == without_gate.close_at
