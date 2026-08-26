@@ -134,7 +134,7 @@ def set_indoor(
 ) -> None:
     """Record the current indoor temperature."""
     st = read_state(state)
-    set_indoor_temp(st, temp, datetime.now())
+    set_indoor_temp(st, temp, datetime.now().astimezone())
     write_state(state, st)
     typer.echo(f"Indoor temp set to {temp:.1f}°F")
 
@@ -251,7 +251,7 @@ def web_push_keys() -> None:
     typer.echo("  service: web_push")
     typer.echo("  web_push:")
     typer.echo(f"    vapid_public_key: \"{public}\"")
-    typer.echo(f"    vapid_private_key: |")
+    typer.echo("    vapid_private_key: |")
     for line in private.splitlines():
         typer.echo(f"      {line}")
     typer.echo("    vapid_subject: \"mailto:you@example.com\"")

@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from ..config import WEEKDAY_KEYS, AppConfig, DaySchedule
 from ..daemon import format_notification, read_indoor_temp, resolve_coordinates
-from ..engine import decide_actions, summarize_missed_opportunity
+from ..engine import decide_actions
 from ..geocode import GeocodeError, geocode as do_geocode
 from ..state import (
     add_subscription,
